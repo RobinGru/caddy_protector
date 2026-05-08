@@ -1,0 +1,242 @@
+<!DOCTYPE html>
+<html lang="de">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Sicherheitsprüfung läuft...</title>
+  <style nonce="{{ .CSPNonce }}">
+    :root {
+      color-scheme: light;
+      font-family: "Segoe UI", "Helvetica Neue", Arial, sans-serif;
+      --bg-top: #f8fbff;
+      --bg-bottom: #eef4ff;
+      --panel: rgba(255, 255, 255, 0.9);
+      --panel-border: rgba(25, 60, 110, 0.12);
+      --text: #122033;
+      --muted: #5b6b82;
+      --accent: #1f6feb;
+      --accent-soft: rgba(31, 111, 235, 0.14);
+      --shadow: 0 24px 80px rgba(18, 32, 51, 0.12);
+      background:
+        radial-gradient(circle at 15% 20%, rgba(31, 111, 235, 0.16), transparent 30%),
+        radial-gradient(circle at 85% 15%, rgba(16, 185, 129, 0.12), transparent 24%),
+        linear-gradient(180deg, var(--bg-top) 0%, var(--bg-bottom) 100%);
+      color: var(--text);
+    }
+
+    * {
+      box-sizing: border-box;
+    }
+
+    body {
+      min-height: 100vh;
+      margin: 0;
+      display: grid;
+      place-items: center;
+      padding: 24px 18px;
+    }
+
+    .card {
+      position: relative;
+      width: min(100%, 720px);
+      padding: 36px;
+      border: 1px solid var(--panel-border);
+      border-radius: 28px;
+      background: var(--panel);
+      box-shadow: var(--shadow);
+      backdrop-filter: blur(10px);
+      overflow: hidden;
+    }
+
+    .card::before {
+      content: "";
+      position: absolute;
+      inset: 0 0 auto 0;
+      height: 6px;
+      background: linear-gradient(90deg, #1f6feb 0%, #35c2ff 55%, #22c55e 100%);
+    }
+
+    .eyebrow {
+      display: inline-flex;
+      align-items: center;
+      gap: 8px;
+      margin: 0 0 18px;
+      padding: 8px 12px;
+      border-radius: 999px;
+      background: var(--accent-soft);
+      color: var(--accent);
+      font-size: 0.92rem;
+      font-weight: 700;
+      letter-spacing: 0.02em;
+    }
+
+    .eyebrow::before {
+      content: "";
+      width: 10px;
+      height: 10px;
+      border-radius: 999px;
+      background: currentColor;
+      box-shadow: 0 0 0 6px rgba(31, 111, 235, 0.14);
+    }
+
+    h1 {
+      margin: 0 0 14px;
+      font-size: clamp(2rem, 4vw, 3rem);
+      font-weight: 800;
+      letter-spacing: -0.03em;
+      line-height: 1.08;
+    }
+
+    .lead {
+      margin: 0;
+      max-width: 56ch;
+      font-size: 1.08rem;
+      line-height: 1.65;
+      color: var(--muted);
+    }
+
+    .info {
+      margin-top: 24px;
+      padding: 18px 20px;
+      border-radius: 18px;
+      background: rgba(255, 255, 255, 0.72);
+      border: 1px solid rgba(25, 60, 110, 0.08);
+    }
+
+    .info strong {
+      display: block;
+      margin-bottom: 6px;
+      font-size: 0.98rem;
+      color: var(--text);
+    }
+
+    .info p {
+      margin: 0;
+      font-size: 0.98rem;
+      line-height: 1.6;
+      color: var(--muted);
+    }
+
+    .progress {
+      display: grid;
+      grid-template-columns: 72px 1fr;
+      gap: 18px;
+      align-items: center;
+      margin-top: 28px;
+      padding: 18px 20px;
+      border-radius: 22px;
+      background: linear-gradient(180deg, rgba(255, 255, 255, 0.95), rgba(242, 247, 255, 0.95));
+      border: 1px solid rgba(25, 60, 110, 0.1);
+    }
+
+    .spinner {
+      width: 56px;
+      height: 56px;
+      margin: 0 auto;
+      border-radius: 50%;
+      border: 5px solid rgba(31, 111, 235, 0.14);
+      border-top-color: var(--accent);
+      border-right-color: #35c2ff;
+      animation: spin 0.9s linear infinite;
+    }
+
+    .progress-copy strong {
+      display: block;
+      margin-bottom: 4px;
+      font-size: 1rem;
+      color: var(--text);
+    }
+
+    .progress-copy p {
+      margin: 0;
+      font-size: 0.95rem;
+      line-height: 1.55;
+      color: var(--muted);
+    }
+
+    .status {
+      margin-top: 12px;
+      min-height: 1.6em;
+      font-size: 0.98rem;
+      font-weight: 600;
+      color: var(--accent);
+    }
+
+    .footnote {
+      margin-top: 18px;
+      font-size: 0.9rem;
+      line-height: 1.5;
+      color: var(--muted);
+    }
+
+    @keyframes spin {
+      to {
+        transform: rotate(360deg);
+      }
+    }
+
+    @media (max-width: 640px) {
+      .card {
+        padding: 28px 22px;
+      }
+
+      .progress {
+        grid-template-columns: 1fr;
+        text-align: center;
+      }
+
+      .lead {
+        font-size: 1rem;
+      }
+    }
+  </style>
+</head>
+<body>
+  <main class="card">
+    <div class="eyebrow">Sicherheitscheck</div>
+    <h1>Ein kurzer Moment, Ihr Browser wird geprüft.</h1>
+    <p class="lead">
+      Bevor die Seite geladen wird, führt Ihr Gerät eine kleine technische Prüfung aus.
+      Das hilft dabei, automatisierte Zugriffe und Missbrauch zu reduzieren.
+    </p>
+
+    <section class="info" aria-label="Hinweis zur Prüfung">
+      <strong>Was passiert gerade?</strong>
+      <p>
+        Ihr Browser berechnet lokal eine kleine Aufgabe. Dabei werden keine zusätzlichen
+        Eingaben von Ihnen benötigt. Nach erfolgreicher Prüfung werden Sie automatisch
+        weitergeleitet.
+      </p>
+    </section>
+
+    <section class="progress" aria-label="Fortschritt">
+      <div class="spinner" aria-hidden="true"></div>
+      <div class="progress-copy">
+        <strong>Prüfung läuft</strong>
+        <p>Das dauert in der Regel nur wenige Sekunden.</p>
+        <div class="status" id="status">Prüfung wird vorbereitet...</div>
+      </div>
+    </section>
+
+    <p class="footnote">
+      Falls es länger dauert oder ein Fehler auftritt, laden Sie die Seite bitte neu.
+    </p>
+  </main>
+
+  <script nonce="{{ .CSPNonce }}">
+    window.__BOT_BARRIER__ = {{ .ConfigJSON }};
+  </script>
+  <script nonce="{{ .CSPNonce }}">{{ .ChallengeJS }}</script>
+  <script nonce="{{ .CSPNonce }}">
+    CaddyProtector.solveChallenge(
+      window.__BOT_BARRIER__.seed,
+      window.__BOT_BARRIER__.complexity,
+      window.__BOT_BARRIER__.verifyPath,
+      document.getElementById("status")
+    ).catch(function(err) {
+      document.getElementById("status").textContent = "Die Prüfung ist fehlgeschlagen. Bitte laden Sie die Seite neu.";
+      console.error(err);
+    });
+  </script>
+</body>
+</html>
