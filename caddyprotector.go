@@ -17,6 +17,7 @@ import (
 	"net/netip"
 	"net/url"
 	"os"
+	"path"
 	"strconv"
 	"strings"
 	"sync"
@@ -195,8 +196,12 @@ type CaddyProtector struct {
 	blacklistDone       chan struct{}
 	countryStop         chan struct{}
 	countryDone         chan struct{}
+	cleanupStop         chan struct{}
+	cleanupDone         chan struct{}
 	whitelistCountrySet map[string]struct{}
 	blacklistCountrySet map[string]struct{}
+	hasCountryRules     bool
+	hasCountryWhitelist bool
 	testCountryLookup   func(netip.Addr) (string, bool)
 	testCountryLoader   func(context.Context, string) (*countryDB, error)
 }
@@ -266,7 +271,7 @@ func (bb *CaddyProtector) Provision(ctx caddy.Context) error {
 	bb.blacklist.Store(blacklist)
 	bb.logIPListLoaded("initial", "blacklist", blacklist)
 
-	if bb.hasCountryRules() {
+	if bb.hasCountryRules {
 		countryDB, err := bb.loadCountryDB(context.Background())
 		if err != nil {
 			return err
@@ -285,11 +290,16 @@ func (bb *CaddyProtector) Provision(ctx caddy.Context) error {
 		bb.blacklistDone = make(chan struct{})
 		go bb.runIPListRefreshLoop("blacklist", time.Duration(bb.BlacklistRefresh), bb.blacklistStop, bb.blacklistDone, bb.loadBlacklist, bb.blacklist.Store)
 	}
-	if time.Duration(bb.CountryRefresh) > 0 && bb.CountryURL != "" && bb.hasCountryRules() {
+	if time.Duration(bb.CountryRefresh) > 0 && bb.CountryURL != "" && bb.hasCountryRules {
 		bb.countryStop = make(chan struct{})
 		bb.countryDone = make(chan struct{})
 		go bb.runCountryRefreshLoop(time.Duration(bb.CountryRefresh), bb.countryStop, bb.countryDone)
 	}
+
+	// Periodischer Cleanup abgelaufener Einträge im Hintergrund
+	bb.cleanupStop = make(chan struct{})
+	bb.cleanupDone = make(chan struct{})
+	go bb.runCleanupLoop(bb.cleanupInterval(), bb.cleanupStop, bb.cleanupDone)
 
 	bb.logger.Info("CaddyProtector-Modul erfolgreich initialisiert",
 		zap.String("complexity", bb.Complexity),
@@ -329,6 +339,8 @@ func (bb *CaddyProtector) Validate() error {
 	bb.BlacklistCountries = blacklistCountries
 	bb.whitelistCountrySet = countryCodeSet(whitelistCountries)
 	bb.blacklistCountrySet = countryCodeSet(blacklistCountries)
+	bb.hasCountryRules = len(bb.WhitelistCountries) > 0 || len(bb.BlacklistCountries) > 0
+	bb.hasCountryWhitelist = len(bb.WhitelistCountries) > 0
 
 	if err := validateIPListConfig("whitelist", bb.WhitelistIPs, bb.WhitelistFile, bb.WhitelistURL, bb.WhitelistRefresh); err != nil {
 		return err
@@ -391,7 +403,7 @@ func (bb *CaddyProtector) ServeHTTP(w http.ResponseWriter, r *http.Request, next
 
 	clientAddr, clientAddrErr := netip.ParseAddr(clientIP)
 	countryCode, countryFound := "", false
-	if bb.hasCountryRules() {
+	if bb.hasCountryRules {
 		countryCode, countryFound = bb.lookupCountryCode(clientAddr, clientAddrErr)
 		if countryFound {
 			logger = logger.With(zap.String("client_country", countryCode))
@@ -401,7 +413,7 @@ func (bb *CaddyProtector) ServeHTTP(w http.ResponseWriter, r *http.Request, next
 			writeBlacklistedResponse(w)
 			return nil
 		}
-		if bb.hasCountryWhitelist() && (!countryFound || !bb.isCountryWhitelisted(countryCode)) {
+		if bb.hasCountryWhitelist && (!countryFound || !bb.isCountryWhitelisted(countryCode)) {
 			logger.Warn("Client-Land ist nicht auf der Country-Whitelist", zap.String("client_country", countryCode))
 			writeBlacklistedResponse(w)
 			return nil
@@ -480,7 +492,17 @@ func safeReturnPath(r *http.Request) string {
 	if returnPath == "" || returnPath[0] != '/' || strings.HasPrefix(returnPath, "//") {
 		return "/"
 	}
-	return returnPath
+	// Pfad-Traversal verhindern mit path.Clean
+	parts := strings.SplitN(returnPath, "?", 2)
+	rawPath := parts[0]
+	cleanPath := path.Clean(rawPath)
+	if cleanPath == "." || !strings.HasPrefix(cleanPath, "/") {
+		return "/"
+	}
+	if len(parts) > 1 {
+		return cleanPath + "?" + parts[1]
+	}
+	return cleanPath
 }
 
 func redactURLForLog(u *url.URL) string {
@@ -606,7 +628,6 @@ func (bb *CaddyProtector) isAllowed(key string) bool {
 	bb.mu.Lock()
 	defer bb.mu.Unlock()
 
-	bb.cleanupExpiredLocked(now)
 	exp, ok := bb.allowed[key]
 	if !ok {
 		return false
@@ -633,7 +654,6 @@ func (bb *CaddyProtector) registerChallengeAttempt(key string) (bool, time.Durat
 	bb.mu.Lock()
 	defer bb.mu.Unlock()
 
-	bb.cleanupExpiredLocked(now)
 	counter := bb.challengeAttempts[key]
 	if !counter.BlockedUntil.IsZero() {
 		if now.Before(counter.BlockedUntil) {
@@ -699,7 +719,6 @@ func (bb *CaddyProtector) createPendingChallenge(key, returnPath string) (string
 	bb.mu.Lock()
 	defer bb.mu.Unlock()
 
-	bb.cleanupExpiredLocked(now)
 	if len(bb.pending) >= bb.MaxPendingChallenges {
 		return "", fmt.Errorf("zu viele offene Challenges")
 	}
@@ -712,6 +731,37 @@ func (bb *CaddyProtector) createPendingChallenge(key, returnPath string) (string
 	}
 
 	return seedHex, nil
+}
+
+// cleanupInterval berechnet das optimale Intervall für den periodischen Cleanup.
+func (bb *CaddyProtector) cleanupInterval() time.Duration {
+	interval := time.Duration(bb.ValidFor) / 2
+	if interval < 5*time.Second {
+		interval = 5 * time.Second
+	}
+	if interval > 60*time.Second {
+		interval = 60 * time.Second
+	}
+	return interval
+}
+
+// runCleanupLoop führt periodisch den Cleanup abgelaufener Einträge im Hintergrund durch.
+func (bb *CaddyProtector) runCleanupLoop(refresh time.Duration, stop chan struct{}, done chan struct{}) {
+	defer close(done)
+
+	ticker := time.NewTicker(refresh)
+	defer ticker.Stop()
+
+	for {
+		select {
+		case <-ticker.C:
+			bb.mu.Lock()
+			bb.cleanupExpiredLocked(time.Now())
+			bb.mu.Unlock()
+		case <-stop:
+			return
+		}
+	}
 }
 
 func (bb *CaddyProtector) cleanupExpiredLocked(now time.Time) {
@@ -742,7 +792,7 @@ func decodeVerifyRequest(r io.Reader) (verifyRequest, verifyDecodeInfo, error) {
 	body, err := io.ReadAll(r)
 	info := verifyDecodeInfo{
 		BodyLength:  len(body),
-		BodyPreview: previewString(string(body), 512),
+		BodyPreview: shortValue(string(body), 512),
 	}
 	if err != nil {
 		return verifyRequest{}, info, err
@@ -759,14 +809,6 @@ func decodeVerifyRequest(r io.Reader) (verifyRequest, verifyDecodeInfo, error) {
 		return verifyRequest{}, info, fmt.Errorf("json enthält mehrere Werte")
 	}
 	return req, info, nil
-}
-
-func previewString(value string, maxLen int) string {
-	value = strings.TrimSpace(value)
-	if len(value) <= maxLen {
-		return value
-	}
-	return value[:maxLen] + "…"
 }
 
 func shortValue(value string, maxLen int) string {
@@ -871,14 +913,6 @@ func (bb *CaddyProtector) isAllowlisted(addr netip.Addr) bool {
 
 func (bb *CaddyProtector) isBlacklisted(addr netip.Addr) bool {
 	return ipListContains(bb.currentBlacklist(), addr)
-}
-
-func (bb *CaddyProtector) hasCountryRules() bool {
-	return len(bb.WhitelistCountries) > 0 || len(bb.BlacklistCountries) > 0
-}
-
-func (bb *CaddyProtector) hasCountryWhitelist() bool {
-	return len(bb.WhitelistCountries) > 0
 }
 
 func (bb *CaddyProtector) isCountryWhitelisted(code string) bool {
@@ -1263,7 +1297,6 @@ func (bb *CaddyProtector) handleVerify(w http.ResponseWriter, r *http.Request, k
 	now := time.Now()
 
 	bb.mu.Lock()
-	bb.cleanupExpiredLocked(now)
 
 	pending, ok := bb.pending[req.Seed]
 	keyMatches := ok && pending.Key == key
@@ -1399,6 +1432,12 @@ func (bb *CaddyProtector) Cleanup() error {
 		<-bb.countryDone
 		bb.countryStop = nil
 		bb.countryDone = nil
+	}
+	if bb.cleanupStop != nil {
+		close(bb.cleanupStop)
+		<-bb.cleanupDone
+		bb.cleanupStop = nil
+		bb.cleanupDone = nil
 	}
 	bb.setCountryDB(nil)
 	return nil
