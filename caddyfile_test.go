@@ -6,7 +6,9 @@ import (
 	"time"
 
 	"github.com/caddyserver/caddy/v2"
+	caddyfileAdapter "github.com/caddyserver/caddy/v2/caddyconfig/caddyfile"
 	"github.com/caddyserver/caddy/v2/caddyconfig/caddyfile"
+	"github.com/caddyserver/caddy/v2/caddyconfig/httpcaddyfile"
 )
 
 func TestUnmarshalCaddyfileParsesAllowForAndVerifyPath(t *testing.T) {
@@ -318,5 +320,39 @@ caddy_protector {
 				t.Fatal("erwarteter Argumentfehler fehlt")
 			}
 		})
+	}
+}
+
+func TestCaddyfileAdapterAcceptsMultipleCountryCodesInImportedSnippet(t *testing.T) {
+	input := `
+(common_protector) {
+	caddy_protector {
+		complexity 15
+		valid_for 15
+		allow_for 20
+		max_challenge_attempts 10
+		max_pending_challenges 100000
+		block_for 1800
+		verify_path /__caddy_protector/verify
+		whitelist_country AT BE BG CY CZ DE DK EE ES FI FR GR HR IE IT LT LU LV MT NL GB US
+		whitelist_url https://raw.githubusercontent.com/AnTheMaker/GoodBots/main/all.ips
+		whitelist_refresh 862400
+		blacklist_url https://raw.githubusercontent.com/fabriziosalmi/caddy-waf/refs/heads/main/ip_blacklist.txt
+		blacklist_refresh 862400
+		country_url https://git.io/GeoLite2-Country.mmdb
+		country_url_refresh 172800
+	}
+}
+
+example.com {
+	import common_protector
+	respond "ok"
+}
+`
+
+	adapter := caddyfileAdapter.Adapter{ServerType: httpcaddyfile.ServerType{}}
+	_, _, err := adapter.Adapt([]byte(input), map[string]any{"filename": "Caddyfile"})
+	if err != nil {
+		t.Fatalf("Adapt() error = %v", err)
 	}
 }
