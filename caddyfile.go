@@ -41,10 +41,7 @@ func (bb *CaddyProtector) UnmarshalCaddyfile(d *caddyfile.Dispenser) error {
 			}
 
 			if param == "whitelist_country" || param == "blacklist_country" {
-				args := make([]string, 0, 2)
-				for d.NextArg() {
-					args = append(args, d.Val())
-				}
+				args := d.RemainingArgs()
 				if len(args) == 0 {
 					return d.ArgErr()
 				}
