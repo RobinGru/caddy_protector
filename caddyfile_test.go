@@ -24,10 +24,14 @@ caddy_protector {
 	whitelist_file /etc/caddy/goodbots.ips
 	whitelist_url https://example.com/goodbots.ips
 	whitelist_refresh 43200
+	whitelist_country DE AT NL
 	blacklist_ip 203.0.113.0/24
 	blacklist_file /etc/caddy/badbots.ips
 	blacklist_url https://example.com/badbots.ips
 	blacklist_refresh 3600
+	blacklist_country RU CN
+	country_url https://example.com/GeoLite2-Country.mmdb
+	country_url_refresh 172800
 	disable_csp_header
 }
 `
@@ -55,6 +59,9 @@ caddy_protector {
 	if bb.WhitelistRefresh != caddy.Duration(12*time.Hour) {
 		t.Fatalf("WhitelistRefresh = %v, erwartet 12h", time.Duration(bb.WhitelistRefresh))
 	}
+	if got := strings.Join(bb.WhitelistCountries, ","); got != "DE,AT,NL" {
+		t.Fatalf("WhitelistCountries = %q", got)
+	}
 	if len(bb.BlacklistIPs) != 1 {
 		t.Fatalf("BlacklistIPs = %v, erwartet 1 Eintrag", bb.BlacklistIPs)
 	}
@@ -66,6 +73,15 @@ caddy_protector {
 	}
 	if bb.BlacklistRefresh != caddy.Duration(time.Hour) {
 		t.Fatalf("BlacklistRefresh = %v, erwartet 1h", time.Duration(bb.BlacklistRefresh))
+	}
+	if got := strings.Join(bb.BlacklistCountries, ","); got != "RU,CN" {
+		t.Fatalf("BlacklistCountries = %q", got)
+	}
+	if bb.CountryURL != "https://example.com/GeoLite2-Country.mmdb" {
+		t.Fatalf("CountryURL = %q", bb.CountryURL)
+	}
+	if bb.CountryRefresh != caddy.Duration(48*time.Hour) {
+		t.Fatalf("CountryRefresh = %v, erwartet 48h", time.Duration(bb.CountryRefresh))
 	}
 	if bb.ValidFor != caddy.Duration(defaultValidFor) {
 		t.Fatalf("ValidFor = %d, erwartet 120s", bb.ValidFor)
@@ -95,6 +111,7 @@ caddy_protector {
 	block_for 1800s
 	whitelist_refresh 3600s
 	blacklist_refresh 7200s
+	country_url_refresh 10800s
 }
 `
 
@@ -118,10 +135,13 @@ caddy_protector {
 	if bb.BlacklistRefresh != caddy.Duration(2*time.Hour) {
 		t.Fatalf("BlacklistRefresh = %v, erwartet 2h", time.Duration(bb.BlacklistRefresh))
 	}
+	if bb.CountryRefresh != caddy.Duration(3*time.Hour) {
+		t.Fatalf("CountryRefresh = %v, erwartet 3h", time.Duration(bb.CountryRefresh))
+	}
 }
 
 func TestUnmarshalCaddyfileRejectsMinuteDurations(t *testing.T) {
-	tests := []string{"valid_for", "allow_for", "block_for", "whitelist_refresh", "blacklist_refresh"}
+	tests := []string{"valid_for", "allow_for", "block_for", "whitelist_refresh", "blacklist_refresh", "country_url_refresh"}
 
 	for _, option := range tests {
 		t.Run(option, func(t *testing.T) {
@@ -237,6 +257,37 @@ caddy_protector {
 	}
 	if !strings.Contains(err.Error(), "blacklist_refresh-Dauer") {
 		t.Fatalf("Fehler = %v, erwartet Hinweis auf blacklist_refresh-Dauer", err)
+	}
+}
+
+func TestUnmarshalCaddyfileRejectsBadCountryRefresh(t *testing.T) {
+	input := `
+caddy_protector {
+	country_url_refresh kaputt
+}
+`
+
+	var bb CaddyProtector
+	err := bb.UnmarshalCaddyfile(caddyfile.NewTestDispenser(input))
+	if err == nil {
+		t.Fatal("erwarteter Fehler fuer ungueltige country_url_refresh-Dauer fehlt")
+	}
+	if !strings.Contains(err.Error(), "country_url_refresh-Dauer") {
+		t.Fatalf("Fehler = %v, erwartet Hinweis auf country_url_refresh-Dauer", err)
+	}
+}
+
+func TestUnmarshalCaddyfileRejectsMissingCountryArguments(t *testing.T) {
+	input := `
+caddy_protector {
+	whitelist_country
+}
+`
+
+	var bb CaddyProtector
+	err := bb.UnmarshalCaddyfile(caddyfile.NewTestDispenser(input))
+	if err == nil {
+		t.Fatal("erwarteter Argumentfehler fuer fehlende Country-Codes fehlt")
 	}
 }
 

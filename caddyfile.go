@@ -40,6 +40,22 @@ func (bb *CaddyProtector) UnmarshalCaddyfile(d *caddyfile.Dispenser) error {
 				continue
 			}
 
+			if param == "whitelist_country" || param == "blacklist_country" {
+				args := make([]string, 0, 2)
+				for d.NextArg() {
+					args = append(args, d.Val())
+				}
+				if len(args) == 0 {
+					return d.ArgErr()
+				}
+				if param == "whitelist_country" {
+					bb.WhitelistCountries = append(bb.WhitelistCountries, args...)
+				} else {
+					bb.BlacklistCountries = append(bb.BlacklistCountries, args...)
+				}
+				continue
+			}
+
 			var arg string
 			if !d.AllArgs(&arg) {
 				return d.ArgErr()
@@ -104,6 +120,14 @@ func (bb *CaddyProtector) UnmarshalCaddyfile(d *caddyfile.Dispenser) error {
 					return d.Errf("ungueltige blacklist_refresh-Dauer: %v", err)
 				}
 				bb.BlacklistRefresh = caddy.Duration(duration)
+			case "country_url":
+				bb.CountryURL = arg
+			case "country_url_refresh":
+				duration, err := parseSecondsDuration(arg)
+				if err != nil {
+					return d.Errf("ungueltige country_url_refresh-Dauer: %v", err)
+				}
+				bb.CountryRefresh = caddy.Duration(duration)
 			case "template":
 				bb.TemplatePath = arg
 			default:

@@ -34,6 +34,7 @@ Der Ablauf pro Request ist:
 - temporäre Sperre bei zu vielen Challenge-Abrufen
 - globale Obergrenze für offene Challenges
 - Allowlist und Blacklist per Inline-IP, Datei oder URL
+- Country-Filter per GeoIP-MMDB mit Whitelist- und Blacklist-Regeln
 - periodischer Refresh von Datei- und URL-Quellen
 - eingebettete Challenge-Seite inklusive lokal gebautem Browser-Bundle
 - standardmäßig gesetzter CSP-Header für die Challenge-Seite
@@ -65,10 +66,14 @@ Alternativ kann das Modul in einen bestehenden eigenen Caddy-Build eingebunden w
 | `whitelist_file` | Lädt zusätzliche Allowlist-Einträge aus einer Datei. | - |
 | `whitelist_url` | Lädt zusätzliche Allowlist-Einträge von einer URL. | - |
 | `whitelist_refresh` | Aktualisiert Datei- und URL-Quellen der Allowlist periodisch in Sekunden. | deaktiviert |
+| `whitelist_country` | Erlaubt nur Requests aus den angegebenen ISO-3166-1-Alpha-2-Ländern, in die bestehende Schutzlogik weiterzulaufen. Mehrere Codes pro Direktive sind erlaubt. | - |
 | `blacklist_ip` | Fügt eine einzelne IP oder ein CIDR-Präfix zur Blacklist hinzu. Kann mehrfach angegeben werden. | - |
 | `blacklist_file` | Lädt zusätzliche Blacklist-Einträge aus einer Datei. | - |
 | `blacklist_url` | Lädt zusätzliche Blacklist-Einträge von einer URL. | - |
 | `blacklist_refresh` | Aktualisiert Datei- und URL-Quellen der Blacklist periodisch in Sekunden. | deaktiviert |
+| `blacklist_country` | Sperrt Requests aus den angegebenen ISO-3166-1-Alpha-2-Ländern sofort. Mehrere Codes pro Direktive sind erlaubt. | - |
+| `country_url` | Lädt eine MaxMind-MMDB für Country-Lookups. | - |
+| `country_url_refresh` | Aktualisiert die MMDB periodisch in Sekunden. | deaktiviert |
 | `template` | Pfad zu einem eigenen HTML-Template. | eingebautes Template |
 | `disable_csp_header` | Deaktiviert den von der Middleware gesetzten CSP-Header. | deaktiviert |
 
@@ -77,6 +82,8 @@ Alternativ kann das Modul in einen bestehenden eigenen Caddy-Build eingebunden w
 - Zeitwerte werden als positive ganze Sekunden angegeben, zum Beispiel `120` oder `120s`.
 - `verify_path` muss mit `/` beginnen.
 - `complexity` darf zwischen `0` und `256` liegen.
+- `whitelist_country` und `blacklist_country` erwarten ISO-3166-1-Alpha-2-Codes wie `DE` oder `RU`.
+- Wenn Country-Regeln verwendet werden, muss `country_url` gesetzt sein.
 - `max_challenge_attempts` und `max_pending_challenges` müssen mindestens `1` sein.
 - Alte Cookie-bezogene Optionen wie `secret`, `seed_cookie_name`, `solution_cookie_name` und `mac_cookie_name` werden nicht unterstützt.
 
@@ -126,10 +133,15 @@ example.com {
     whitelist_file /etc/caddy/goodbots.ips
     whitelist_url https://raw.githubusercontent.com/AnTheMaker/GoodBots/main/all.ips
     whitelist_refresh 43200
+    whitelist_country DE AT NL
 
     blacklist_ip 203.0.113.0/24
     blacklist_url https://raw.githubusercontent.com/fabriziosalmi/caddy-waf/refs/heads/main/ip_blacklist.txt
     blacklist_refresh 3600
+    blacklist_country RU CN
+
+    country_url https://git.io/GeoLite2-Country.mmdb
+    country_url_refresh 172800
   }
 
   reverse_proxy 127.0.0.1:8081

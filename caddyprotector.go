@@ -25,6 +25,7 @@ import (
 
 	"github.com/caddyserver/caddy/v2"
 	"github.com/caddyserver/caddy/v2/modules/caddyhttp"
+	"github.com/oschwald/maxminddb-golang/v2"
 	"github.com/zeebo/blake3"
 	"go.uber.org/zap"
 
@@ -96,6 +97,18 @@ type allowlistEntry struct {
 	prefix netip.Prefix
 }
 
+type countryDB struct {
+	reader *maxminddb.Reader
+	source string
+	size   int
+}
+
+type geoIPCountryRecord struct {
+	Country struct {
+		ISOCode string `maxminddb:"iso_code"`
+	} `maxminddb:"country"`
+}
+
 // CaddyProtector ist ein Caddy-Middleware-Modul, das vor dem Zugriff auf HTTP-Ressourcen
 // das Lösen einer Rechen-Challenge verlangt.
 type CaddyProtector struct {
@@ -142,6 +155,9 @@ type CaddyProtector struct {
 	// WhitelistRefresh bestimmt das Refresh-Intervall fuer Datei- und URL-Quellen.
 	WhitelistRefresh caddy.Duration `json:"whitelist_refresh,omitempty"`
 
+	// WhitelistCountries begrenzt Requests auf bestimmte ISO-3166-1-Alpha-2-Laender.
+	WhitelistCountries []string `json:"whitelist_country,omitempty"`
+
 	// BlacklistIPs sind IPs oder CIDR-Praefixe, die sofort gesperrt werden.
 	BlacklistIPs []string `json:"blacklist_ip,omitempty"`
 
@@ -154,18 +170,35 @@ type CaddyProtector struct {
 	// BlacklistRefresh bestimmt das Refresh-Intervall fuer Datei- und URL-Quellen.
 	BlacklistRefresh caddy.Duration `json:"blacklist_refresh,omitempty"`
 
-	mu                sync.Mutex
-	pending           map[string]pendingChallenge
-	allowed           map[string]time.Time
-	challengeAttempts map[string]challengeAttemptCounter
-	challengeTemplate *template.Template
-	logger            *zap.Logger
-	allowlist         atomic.Value
-	blacklist         atomic.Value
-	allowlistStop     chan struct{}
-	allowlistDone     chan struct{}
-	blacklistStop     chan struct{}
-	blacklistDone     chan struct{}
+	// BlacklistCountries sperrt Requests aus bestimmten ISO-3166-1-Alpha-2-Laendern.
+	BlacklistCountries []string `json:"blacklist_country,omitempty"`
+
+	// CountryURL verweist auf eine MaxMind-MMDB fuer Country-Lookups.
+	CountryURL string `json:"country_url,omitempty"`
+
+	// CountryRefresh bestimmt das Refresh-Intervall fuer die Country-MMDB.
+	CountryRefresh caddy.Duration `json:"country_url_refresh,omitempty"`
+
+	mu                  sync.Mutex
+	pending             map[string]pendingChallenge
+	allowed             map[string]time.Time
+	challengeAttempts   map[string]challengeAttemptCounter
+	challengeTemplate   *template.Template
+	logger              *zap.Logger
+	allowlist           atomic.Value
+	blacklist           atomic.Value
+	countryDBMu         sync.RWMutex
+	countryDB           *countryDB
+	allowlistStop       chan struct{}
+	allowlistDone       chan struct{}
+	blacklistStop       chan struct{}
+	blacklistDone       chan struct{}
+	countryStop         chan struct{}
+	countryDone         chan struct{}
+	whitelistCountrySet map[string]struct{}
+	blacklistCountrySet map[string]struct{}
+	testCountryLookup   func(netip.Addr) (string, bool)
+	testCountryLoader   func(context.Context, string) (*countryDB, error)
 }
 
 func (*CaddyProtector) CaddyModule() caddy.ModuleInfo {
@@ -233,6 +266,15 @@ func (bb *CaddyProtector) Provision(ctx caddy.Context) error {
 	bb.blacklist.Store(blacklist)
 	bb.logIPListLoaded("initial", "blacklist", blacklist)
 
+	if bb.hasCountryRules() {
+		countryDB, err := bb.loadCountryDB(context.Background())
+		if err != nil {
+			return err
+		}
+		bb.setCountryDB(countryDB)
+		bb.logCountryDBLoaded("initial", countryDB)
+	}
+
 	if time.Duration(bb.WhitelistRefresh) > 0 && (bb.WhitelistFile != "" || bb.WhitelistURL != "") {
 		bb.allowlistStop = make(chan struct{})
 		bb.allowlistDone = make(chan struct{})
@@ -242,6 +284,11 @@ func (bb *CaddyProtector) Provision(ctx caddy.Context) error {
 		bb.blacklistStop = make(chan struct{})
 		bb.blacklistDone = make(chan struct{})
 		go bb.runIPListRefreshLoop("blacklist", time.Duration(bb.BlacklistRefresh), bb.blacklistStop, bb.blacklistDone, bb.loadBlacklist, bb.blacklist.Store)
+	}
+	if time.Duration(bb.CountryRefresh) > 0 && bb.CountryURL != "" && bb.hasCountryRules() {
+		bb.countryStop = make(chan struct{})
+		bb.countryDone = make(chan struct{})
+		go bb.runCountryRefreshLoop(time.Duration(bb.CountryRefresh), bb.countryStop, bb.countryDone)
 	}
 
 	bb.logger.Info("CaddyProtector-Modul erfolgreich initialisiert",
@@ -256,20 +303,40 @@ func (bb *CaddyProtector) Provision(ctx caddy.Context) error {
 		zap.String("whitelist_file", bb.WhitelistFile),
 		zap.String("whitelist_url", bb.WhitelistURL),
 		zap.Duration("whitelist_refresh", time.Duration(bb.WhitelistRefresh)),
+		zap.Strings("whitelist_countries", bb.WhitelistCountries),
 		zap.Strings("blacklist_ips", bb.BlacklistIPs),
 		zap.String("blacklist_file", bb.BlacklistFile),
 		zap.String("blacklist_url", bb.BlacklistURL),
 		zap.Duration("blacklist_refresh", time.Duration(bb.BlacklistRefresh)),
+		zap.Strings("blacklist_countries", bb.BlacklistCountries),
+		zap.String("country_url", bb.CountryURL),
+		zap.Duration("country_url_refresh", time.Duration(bb.CountryRefresh)),
 	)
 	return nil
 }
 
 // Validate prüft die Konfiguration.
 func (bb *CaddyProtector) Validate() error {
+	whitelistCountries, err := normalizeCountryCodes("whitelist_country", bb.WhitelistCountries)
+	if err != nil {
+		return err
+	}
+	blacklistCountries, err := normalizeCountryCodes("blacklist_country", bb.BlacklistCountries)
+	if err != nil {
+		return err
+	}
+	bb.WhitelistCountries = whitelistCountries
+	bb.BlacklistCountries = blacklistCountries
+	bb.whitelistCountrySet = countryCodeSet(whitelistCountries)
+	bb.blacklistCountrySet = countryCodeSet(blacklistCountries)
+
 	if err := validateIPListConfig("whitelist", bb.WhitelistIPs, bb.WhitelistFile, bb.WhitelistURL, bb.WhitelistRefresh); err != nil {
 		return err
 	}
 	if err := validateIPListConfig("blacklist", bb.BlacklistIPs, bb.BlacklistFile, bb.BlacklistURL, bb.BlacklistRefresh); err != nil {
+		return err
+	}
+	if err := validateCountryConfig(bb.WhitelistCountries, bb.BlacklistCountries, bb.CountryURL, bb.CountryRefresh); err != nil {
 		return err
 	}
 	if bb.Complexity == "" {
@@ -323,6 +390,23 @@ func (bb *CaddyProtector) ServeHTTP(w http.ResponseWriter, r *http.Request, next
 	}
 
 	clientAddr, clientAddrErr := netip.ParseAddr(clientIP)
+	countryCode, countryFound := "", false
+	if bb.hasCountryRules() {
+		countryCode, countryFound = bb.lookupCountryCode(clientAddr, clientAddrErr)
+		if countryFound {
+			logger = logger.With(zap.String("client_country", countryCode))
+		}
+		if countryFound && bb.isCountryBlacklisted(countryCode) {
+			logger.Warn("Client-Land steht auf der Country-Blacklist", zap.String("client_country", countryCode))
+			writeBlacklistedResponse(w)
+			return nil
+		}
+		if bb.hasCountryWhitelist() && (!countryFound || !bb.isCountryWhitelisted(countryCode)) {
+			logger.Warn("Client-Land ist nicht auf der Country-Whitelist", zap.String("client_country", countryCode))
+			writeBlacklistedResponse(w)
+			return nil
+		}
+	}
 	if clientAddrErr == nil && bb.isBlacklisted(clientAddr) {
 		logger.Warn("Client-IP steht auf der Blacklist")
 		writeBlacklistedResponse(w)
@@ -710,6 +794,68 @@ func validateIPListConfig(kind string, inline []string, _ string, rawURL string,
 	return nil
 }
 
+func validateCountryConfig(whitelist, blacklist []string, rawURL string, refresh caddy.Duration) error {
+	if rawURL != "" {
+		parsedURL, err := url.Parse(rawURL)
+		if err != nil || parsedURL.Scheme == "" || parsedURL.Host == "" {
+			return fmt.Errorf("country_url muss eine gueltige absolute URL sein")
+		}
+	}
+	if refresh < 0 {
+		return fmt.Errorf("country_url_refresh muss groesser oder gleich 0 sein")
+	}
+	if len(whitelist) == 0 && len(blacklist) == 0 {
+		return nil
+	}
+	if rawURL == "" {
+		return fmt.Errorf("country_url muss gesetzt sein, wenn whitelist_country oder blacklist_country verwendet wird")
+	}
+	return nil
+}
+
+func normalizeCountryCodes(kind string, codes []string) ([]string, error) {
+	if len(codes) == 0 {
+		return nil, nil
+	}
+	seen := make(map[string]struct{}, len(codes))
+	normalized := make([]string, 0, len(codes))
+	for _, raw := range codes {
+		code := strings.ToUpper(strings.TrimSpace(raw))
+		if !isValidCountryCode(code) {
+			return nil, fmt.Errorf("%s enthaelt einen ungueltigen Country-Code: %q", kind, raw)
+		}
+		if _, ok := seen[code]; ok {
+			continue
+		}
+		seen[code] = struct{}{}
+		normalized = append(normalized, code)
+	}
+	return normalized, nil
+}
+
+func isValidCountryCode(code string) bool {
+	if len(code) != 2 {
+		return false
+	}
+	for i := 0; i < len(code); i++ {
+		if code[i] < 'A' || code[i] > 'Z' {
+			return false
+		}
+	}
+	return true
+}
+
+func countryCodeSet(codes []string) map[string]struct{} {
+	if len(codes) == 0 {
+		return nil
+	}
+	set := make(map[string]struct{}, len(codes))
+	for _, code := range codes {
+		set[code] = struct{}{}
+	}
+	return set
+}
+
 func (bb *CaddyProtector) currentAllowlist() *ipAllowlist {
 	loaded := bb.allowlist.Load()
 	return currentIPList(loaded)
@@ -725,6 +871,51 @@ func (bb *CaddyProtector) isAllowlisted(addr netip.Addr) bool {
 
 func (bb *CaddyProtector) isBlacklisted(addr netip.Addr) bool {
 	return ipListContains(bb.currentBlacklist(), addr)
+}
+
+func (bb *CaddyProtector) hasCountryRules() bool {
+	return len(bb.WhitelistCountries) > 0 || len(bb.BlacklistCountries) > 0
+}
+
+func (bb *CaddyProtector) hasCountryWhitelist() bool {
+	return len(bb.WhitelistCountries) > 0
+}
+
+func (bb *CaddyProtector) isCountryWhitelisted(code string) bool {
+	_, ok := bb.whitelistCountrySet[code]
+	return ok
+}
+
+func (bb *CaddyProtector) isCountryBlacklisted(code string) bool {
+	_, ok := bb.blacklistCountrySet[code]
+	return ok
+}
+
+func (bb *CaddyProtector) lookupCountryCode(addr netip.Addr, addrErr error) (string, bool) {
+	if bb.testCountryLookup != nil {
+		return bb.testCountryLookup(addr)
+	}
+	if addrErr != nil {
+		return "", false
+	}
+
+	bb.countryDBMu.RLock()
+	defer bb.countryDBMu.RUnlock()
+
+	if bb.countryDB == nil || bb.countryDB.reader == nil {
+		return "", false
+	}
+
+	var record geoIPCountryRecord
+	if err := bb.countryDB.reader.Lookup(addr).Decode(&record); err != nil {
+		return "", false
+	}
+
+	code := strings.ToUpper(strings.TrimSpace(record.Country.ISOCode))
+	if !isValidCountryCode(code) {
+		return "", false
+	}
+	return code, true
 }
 
 func currentIPList(loaded any) *ipAllowlist {
@@ -861,27 +1052,35 @@ func parseAllowlistEntry(source string, lineNo int, raw string) (*allowlistEntry
 }
 
 func (bb *CaddyProtector) fetchIPListURL(ctx context.Context, kind, rawURL string) (string, error) {
+	body, err := bb.fetchURLBytes(ctx, kind, rawURL)
+	if err != nil {
+		return "", err
+	}
+	return string(body), nil
+}
+
+func (bb *CaddyProtector) fetchURLBytes(ctx context.Context, kind, rawURL string) ([]byte, error) {
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, rawURL, nil)
 	if err != nil {
-		return "", fmt.Errorf("%s_url konnte nicht erstellt werden: %w", kind, err)
+		return nil, fmt.Errorf("%s_url konnte nicht erstellt werden: %w", kind, err)
 	}
 
 	client := &http.Client{Timeout: 30 * time.Second}
 	resp, err := client.Do(req)
 	if err != nil {
-		return "", fmt.Errorf("%s_url konnte nicht geladen werden: %w", kind, err)
+		return nil, fmt.Errorf("%s_url konnte nicht geladen werden: %w", kind, err)
 	}
 	defer resp.Body.Close()
 
 	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
-		return "", fmt.Errorf("%s_url lieferte HTTP %d", kind, resp.StatusCode)
+		return nil, fmt.Errorf("%s_url lieferte HTTP %d", kind, resp.StatusCode)
 	}
 
 	body, err := io.ReadAll(resp.Body)
 	if err != nil {
-		return "", fmt.Errorf("%s_url konnte nicht gelesen werden: %w", kind, err)
+		return nil, fmt.Errorf("%s_url konnte nicht gelesen werden: %w", kind, err)
 	}
-	return string(body), nil
+	return body, nil
 }
 
 func (bb *CaddyProtector) runIPListRefreshLoop(kind string, refresh time.Duration, stop chan struct{}, done chan struct{}, load func(context.Context) (*ipAllowlist, error), store func(any)) {
@@ -906,6 +1105,74 @@ func (bb *CaddyProtector) runIPListRefreshLoop(kind string, refresh time.Duratio
 			return
 		}
 	}
+}
+
+func (bb *CaddyProtector) loadCountryDB(ctx context.Context) (*countryDB, error) {
+	if bb.testCountryLoader != nil {
+		return bb.testCountryLoader(ctx, bb.CountryURL)
+	}
+
+	body, err := bb.fetchURLBytes(ctx, "country", bb.CountryURL)
+	if err != nil {
+		return nil, err
+	}
+
+	reader, err := maxminddb.OpenBytes(body)
+	if err != nil {
+		return nil, fmt.Errorf("country_url enthaelt keine gueltige MMDB: %w", err)
+	}
+
+	return &countryDB{
+		reader: reader,
+		source: "country:url:" + bb.CountryURL,
+		size:   len(body),
+	}, nil
+}
+
+func (bb *CaddyProtector) setCountryDB(next *countryDB) {
+	bb.countryDBMu.Lock()
+	prev := bb.countryDB
+	bb.countryDB = next
+	bb.countryDBMu.Unlock()
+
+	if prev != nil && prev.reader != nil {
+		_ = prev.reader.Close()
+	}
+}
+
+func (bb *CaddyProtector) runCountryRefreshLoop(refresh time.Duration, stop chan struct{}, done chan struct{}) {
+	defer close(done)
+
+	ticker := time.NewTicker(refresh)
+	defer ticker.Stop()
+
+	for {
+		select {
+		case <-ticker.C:
+			ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+			db, err := bb.loadCountryDB(ctx)
+			cancel()
+			if err != nil {
+				bb.logger.Warn("Country-DB-Refresh fehlgeschlagen", zap.Error(err))
+				continue
+			}
+			bb.setCountryDB(db)
+			bb.logCountryDBLoaded("refresh", db)
+		case <-stop:
+			return
+		}
+	}
+}
+
+func (bb *CaddyProtector) logCountryDBLoaded(mode string, db *countryDB) {
+	if db == nil {
+		return
+	}
+	bb.logger.Info("Country-DB geladen",
+		zap.String("mode", mode),
+		zap.String("source", db.source),
+		zap.Int("size_bytes", db.size),
+	)
 }
 
 func (bb *CaddyProtector) logAllowlistLoaded(mode string, allowlist *ipAllowlist) {
@@ -1127,5 +1394,12 @@ func (bb *CaddyProtector) Cleanup() error {
 		bb.blacklistStop = nil
 		bb.blacklistDone = nil
 	}
+	if bb.countryStop != nil {
+		close(bb.countryStop)
+		<-bb.countryDone
+		bb.countryStop = nil
+		bb.countryDone = nil
+	}
+	bb.setCountryDB(nil)
 	return nil
 }

@@ -154,6 +154,64 @@ func TestValidateRejectsBadBlacklistURL(t *testing.T) {
 	}
 }
 
+func TestValidateRejectsMissingCountryURLWhenCountriesConfigured(t *testing.T) {
+	bb := newTestProtector(t)
+	bb.WhitelistCountries = []string{"DE", "AT"}
+
+	err := bb.Validate()
+	if err == nil {
+		t.Fatal("erwarteter Fehler fuer fehlende country_url fehlt")
+	}
+	if !strings.Contains(err.Error(), "country_url") {
+		t.Fatalf("Fehler = %v, erwartet Hinweis auf country_url", err)
+	}
+}
+
+func TestValidateRejectsBadCountryURL(t *testing.T) {
+	bb := newTestProtector(t)
+	bb.BlacklistCountries = []string{"RU"}
+	bb.CountryURL = "://bad-url"
+
+	err := bb.Validate()
+	if err == nil {
+		t.Fatal("erwarteter Fehler fuer ungueltige country_url fehlt")
+	}
+	if !strings.Contains(err.Error(), "country_url") {
+		t.Fatalf("Fehler = %v, erwartet Hinweis auf country_url", err)
+	}
+}
+
+func TestValidateRejectsBadCountryCode(t *testing.T) {
+	bb := newTestProtector(t)
+	bb.WhitelistCountries = []string{"D3"}
+	bb.CountryURL = "https://example.com/GeoLite2-Country.mmdb"
+
+	err := bb.Validate()
+	if err == nil {
+		t.Fatal("erwarteter Fehler fuer ungueltigen Country-Code fehlt")
+	}
+	if !strings.Contains(err.Error(), "whitelist_country") {
+		t.Fatalf("Fehler = %v, erwartet Hinweis auf whitelist_country", err)
+	}
+}
+
+func TestValidateNormalizesCountryCodes(t *testing.T) {
+	bb := newTestProtector(t)
+	bb.WhitelistCountries = []string{"de", "AT", "de"}
+	bb.BlacklistCountries = []string{"ru"}
+	bb.CountryURL = "https://example.com/GeoLite2-Country.mmdb"
+
+	if err := bb.Validate(); err != nil {
+		t.Fatalf("Validate() error = %v", err)
+	}
+	if got := strings.Join(bb.WhitelistCountries, ","); got != "DE,AT" {
+		t.Fatalf("WhitelistCountries = %q", got)
+	}
+	if got := strings.Join(bb.BlacklistCountries, ","); got != "RU" {
+		t.Fatalf("BlacklistCountries = %q", got)
+	}
+}
+
 func TestResolveComplexityFallsBackForImpossiblePlaceholderValue(t *testing.T) {
 	bb := newTestProtector(t)
 	bb.Complexity = "{vars.caddy_protector_complexity}"
@@ -946,6 +1004,130 @@ func TestServeHTTPBlocksBlacklistedEvenWhenComplexityIsZero(t *testing.T) {
 	}
 }
 
+func TestServeHTTPCountryBlacklistBlocksBeforeIPAllowlist(t *testing.T) {
+	bb := newTestProtector(t)
+	addr := netip.MustParseAddr("192.0.2.1")
+	bb.BlacklistCountries = []string{"RU"}
+	bb.CountryURL = "https://example.com/GeoLite2-Country.mmdb"
+	if err := bb.Validate(); err != nil {
+		t.Fatalf("Validate() error = %v", err)
+	}
+	bb.testCountryLookup = func(got netip.Addr) (string, bool) {
+		if got != addr {
+			t.Fatalf("lookup addr = %v, erwartet %v", got, addr)
+		}
+		return "RU", true
+	}
+	bb.allowlist.Store(&ipAllowlist{exactIPs: map[netip.Addr]struct{}{addr: {}}})
+
+	req := newChallengeRequest(http.MethodGet, "http://example.com/protected", "192.0.2.1", "UA")
+	rr := newHijackableResponseWriter()
+	called := false
+
+	err := bb.ServeHTTP(rr, req, caddyhttp.HandlerFunc(func(w http.ResponseWriter, r *http.Request) error {
+		called = true
+		return nil
+	}))
+	if err != nil {
+		t.Fatalf("ServeHTTP() error = %v", err)
+	}
+	if called {
+		t.Fatal("Country-Blacklist darf nicht von der IP-Allowlist uebersteuert werden")
+	}
+	if !rr.conn.closed {
+		t.Fatal("Country-Blacklist muss die Verbindung schliessen")
+	}
+}
+
+func TestServeHTTPCountryWhitelistStillServesChallenge(t *testing.T) {
+	bb := newTestProtector(t)
+	bb.WhitelistCountries = []string{"DE"}
+	bb.CountryURL = "https://example.com/GeoLite2-Country.mmdb"
+	if err := bb.Validate(); err != nil {
+		t.Fatalf("Validate() error = %v", err)
+	}
+	bb.testCountryLookup = func(netip.Addr) (string, bool) {
+		return "DE", true
+	}
+
+	req := newChallengeRequest(http.MethodGet, "http://example.com/protected", "192.0.2.1", "UA")
+	rr := httptest.NewRecorder()
+
+	err := bb.ServeHTTP(rr, req, caddyhttp.HandlerFunc(func(w http.ResponseWriter, r *http.Request) error {
+		t.Fatal("Country-Whitelist darf nicht direkt freigeben")
+		return nil
+	}))
+	if err != nil {
+		t.Fatalf("ServeHTTP() error = %v", err)
+	}
+	if rr.Code != http.StatusOK {
+		t.Fatalf("Status = %d, erwartet %d", rr.Code, http.StatusOK)
+	}
+	if rr.Header().Get("X-Bot-Barrier") != "challenge" {
+		t.Fatalf("X-Bot-Barrier = %q, erwartet challenge", rr.Header().Get("X-Bot-Barrier"))
+	}
+}
+
+func TestServeHTTPCountryWhitelistAllowsFurtherIPAllowlist(t *testing.T) {
+	bb := newTestProtector(t)
+	addr := netip.MustParseAddr("192.0.2.1")
+	bb.WhitelistCountries = []string{"DE"}
+	bb.CountryURL = "https://example.com/GeoLite2-Country.mmdb"
+	if err := bb.Validate(); err != nil {
+		t.Fatalf("Validate() error = %v", err)
+	}
+	bb.testCountryLookup = func(netip.Addr) (string, bool) {
+		return "DE", true
+	}
+	bb.allowlist.Store(&ipAllowlist{exactIPs: map[netip.Addr]struct{}{addr: {}}})
+
+	req := newChallengeRequest(http.MethodGet, "http://example.com/protected", "192.0.2.1", "UA")
+	rr := httptest.NewRecorder()
+	called := false
+
+	err := bb.ServeHTTP(rr, req, caddyhttp.HandlerFunc(func(w http.ResponseWriter, r *http.Request) error {
+		called = true
+		w.WriteHeader(http.StatusNoContent)
+		return nil
+	}))
+	if err != nil {
+		t.Fatalf("ServeHTTP() error = %v", err)
+	}
+	if !called {
+		t.Fatal("IP-Allowlist sollte nach erfolgreichem Country-Gate weiter greifen")
+	}
+}
+
+func TestServeHTTPCountryWhitelistBlocksUnknownCountry(t *testing.T) {
+	bb := newTestProtector(t)
+	bb.WhitelistCountries = []string{"DE"}
+	bb.CountryURL = "https://example.com/GeoLite2-Country.mmdb"
+	if err := bb.Validate(); err != nil {
+		t.Fatalf("Validate() error = %v", err)
+	}
+	bb.testCountryLookup = func(netip.Addr) (string, bool) {
+		return "", false
+	}
+
+	req := newChallengeRequest(http.MethodGet, "http://example.com/protected", "192.0.2.1", "UA")
+	rr := newHijackableResponseWriter()
+	called := false
+
+	err := bb.ServeHTTP(rr, req, caddyhttp.HandlerFunc(func(w http.ResponseWriter, r *http.Request) error {
+		called = true
+		return nil
+	}))
+	if err != nil {
+		t.Fatalf("ServeHTTP() error = %v", err)
+	}
+	if called {
+		t.Fatal("Request ohne Country-Treffer darf bei aktiver Country-Whitelist nicht weiterlaufen")
+	}
+	if !rr.conn.closed {
+		t.Fatal("Country-Whitelist-Miss muss die Verbindung schliessen")
+	}
+}
+
 func TestServeHTTPBlacklistBeatsAllowlist(t *testing.T) {
 	bb := newTestProtector(t)
 	addr := netip.MustParseAddr("192.0.2.1")
@@ -1093,6 +1275,39 @@ func TestServeHTTPVerifyPathIsInterceptedEvenWhenBlacklisted(t *testing.T) {
 	}
 }
 
+func TestServeHTTPVerifyPathIsInterceptedEvenWhenCountryBlacklisted(t *testing.T) {
+	bb := newTestProtector(t)
+	bb.BlacklistCountries = []string{"RU"}
+	bb.CountryURL = "https://example.com/GeoLite2-Country.mmdb"
+	if err := bb.Validate(); err != nil {
+		t.Fatalf("Validate() error = %v", err)
+	}
+	bb.testCountryLookup = func(netip.Addr) (string, bool) {
+		return "RU", true
+	}
+
+	req := verifyRequestFor(t, "00112233445566778899aabbccddeeff00112233445566778899aabbccddeeff", "abcd")
+	req = req.WithContext(context.WithValue(req.Context(), caddyhttp.VarsCtxKey, map[string]any{
+		"client_ip": "192.0.2.1",
+	}))
+	rr := httptest.NewRecorder()
+	called := false
+
+	err := bb.ServeHTTP(rr, req, caddyhttp.HandlerFunc(func(w http.ResponseWriter, r *http.Request) error {
+		called = true
+		return nil
+	}))
+	if err != nil {
+		t.Fatalf("ServeHTTP() error = %v", err)
+	}
+	if called {
+		t.Fatal("Verify-Endpunkt darf auch fuer Country-blacklisted Clients nicht weitergereicht werden")
+	}
+	if rr.Code != http.StatusForbidden {
+		t.Fatalf("Status = %d, erwartet %d", rr.Code, http.StatusForbidden)
+	}
+}
+
 func TestChallengeAttemptCounterExpiresAfterBlockWindow(t *testing.T) {
 	bb := newTestProtector(t)
 	key := clientKey("192.0.2.1", "UA")
@@ -1202,6 +1417,8 @@ func TestCleanupStopsRefreshLoops(t *testing.T) {
 	bb.allowlistDone = make(chan struct{})
 	bb.blacklistStop = make(chan struct{})
 	bb.blacklistDone = make(chan struct{})
+	bb.countryStop = make(chan struct{})
+	bb.countryDone = make(chan struct{})
 
 	go func() {
 		<-bb.allowlistStop
@@ -1211,11 +1428,15 @@ func TestCleanupStopsRefreshLoops(t *testing.T) {
 		<-bb.blacklistStop
 		close(bb.blacklistDone)
 	}()
+	go func() {
+		<-bb.countryStop
+		close(bb.countryDone)
+	}()
 
 	if err := bb.Cleanup(); err != nil {
 		t.Fatalf("Cleanup() error = %v", err)
 	}
-	if bb.allowlistStop != nil || bb.allowlistDone != nil || bb.blacklistStop != nil || bb.blacklistDone != nil {
+	if bb.allowlistStop != nil || bb.allowlistDone != nil || bb.blacklistStop != nil || bb.blacklistDone != nil || bb.countryStop != nil || bb.countryDone != nil {
 		t.Fatal("Cleanup() sollte Refresh-Kanaele zuruecksetzen")
 	}
 }
