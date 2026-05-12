@@ -53,6 +53,15 @@ func (bb *CaddyProtector) UnmarshalCaddyfile(d *caddyfile.Dispenser) error {
 				continue
 			}
 
+			if param == "csp_script_src" {
+				args := d.RemainingArgs()
+				if len(args) == 0 {
+					return d.ArgErr()
+				}
+				bb.CSPScriptSrc = append(bb.CSPScriptSrc, args...)
+				continue
+			}
+
 			var arg string
 			if !d.AllArgs(&arg) {
 				return d.ArgErr()
@@ -97,8 +106,6 @@ func (bb *CaddyProtector) UnmarshalCaddyfile(d *caddyfile.Dispenser) error {
 				bb.WhitelistIPs = append(bb.WhitelistIPs, arg)
 			case "whitelist_file":
 				bb.WhitelistFile = arg
-			case "csp_script_src":
-				bb.CSPScriptSrc = append(bb.CSPScriptSrc, arg)
 			case "whitelist_url":
 				bb.WhitelistURL = arg
 			case "whitelist_refresh":

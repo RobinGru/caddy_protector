@@ -74,7 +74,7 @@ Alternativ kann das Modul in einen bestehenden eigenen Caddy-Build eingebunden w
 | `blacklist_country` | Sperrt Requests aus den angegebenen ISO-3166-1-Alpha-2-Ländern sofort. Mehrere Codes pro Direktive sind erlaubt. | - |
 | `country_url` | Lädt eine MaxMind-MMDB für Country-Lookups. | - |
 | `country_url_refresh` | Aktualisiert die MMDB periodisch in Sekunden. | deaktiviert |
-| `csp_script_src` | Fügt eine Quelle zur `script-src`-CSP-Direktive hinzu, z.B. für Cloudflare Rocket Loader. Kann mehrfach angegeben werden. | - |
+| `csp_script_src` | Fügt eine Quelle zur `script-src`-CSP-Direktive hinzu, z.B. für Cloudflare Rocket Loader. CSP-Keywords wie `'strict-dynamic'` werden ebenfalls unterstützt. Kann mehrfach angegeben werden. | - |
 | `template` | Pfad zu einem eigenen HTML-Template. | eingebautes Template |
 | `disable_csp_header` | Deaktiviert den von der Middleware gesetzten CSP-Header. | deaktiviert |
 
@@ -166,10 +166,24 @@ Die eingebaute Challenge-Seite nutzt Inline-Styles und eingebettetes JavaScript 
 default-src 'none'; script-src 'nonce-<nonce>'; style-src 'nonce-<nonce>'; connect-src 'self'; img-src 'self'; base-uri 'none'; form-action 'self'; object-src 'none';
 ```
 
-Wenn zusätzliche Skript-Quellen über `csp_script_src` konfiguriert wurden, werden diese an die `script-src`-Direktive angehängt, z.B.:
+Wenn zusätzliche Skript-Quellen über `csp_script_src` konfiguriert wurden, werden diese an die `script-src`-Direktive angehängt.
 
+### Cloudflare Rocket Loader
+
+Wenn Cloudflare Rocket Loader aktiv ist und zusammen mit CaddyProtector verwendet wird, muss die CSP wie folgt erweitert werden:
+
+```caddyfile
+caddy_protector {
+    csp_script_src https://5wn.de 'strict-dynamic'
+}
+```
+
+- `https://5wn.de` erlaubt das Laden der externen `rocket-loader.min.js`.
+- `'strict-dynamic'` erlaubt dem nonce-geladenen Rocket Loader, dynamisch weitere Inline-Skripte zu erstellen und auszuführen.
+
+Die resultierende CSP wird dann:
 ```text
-script-src 'nonce-<nonce>' https://abc.de
+script-src 'nonce-<nonce>' https://5wn.de 'strict-dynamic'
 ```
 
 Wenn ein eigenes Template verwendet wird, sollte es diese Daten verarbeiten:
