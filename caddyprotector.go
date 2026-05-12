@@ -498,9 +498,14 @@ func safeReturnPath(r *http.Request) string {
 	// Pfad-Traversal verhindern mit path.Clean
 	parts := strings.SplitN(returnPath, "?", 2)
 	rawPath := parts[0]
+	hasTrailingSlash := len(rawPath) > 1 && rawPath[len(rawPath)-1] == '/'
 	cleanPath := path.Clean(rawPath)
 	if cleanPath == "." || !strings.HasPrefix(cleanPath, "/") {
 		return "/"
+	}
+	// path.Clean entfernt den trailing Slash; wir stellen ihn wieder her, falls vorhanden
+	if hasTrailingSlash && cleanPath[len(cleanPath)-1] != '/' {
+		cleanPath += "/"
 	}
 	if len(parts) > 1 {
 		return cleanPath + "?" + parts[1]
