@@ -174,16 +174,16 @@ Wenn Cloudflare Rocket Loader aktiv ist und zusammen mit CaddyProtector verwende
 
 ```caddyfile
 caddy_protector {
-    csp_script_src https://5wn.de 'strict-dynamic'
+    csp_script_src https://abc.de 'strict-dynamic'
 }
 ```
 
-- `https://5wn.de` erlaubt das Laden der externen `rocket-loader.min.js`.
+- `https://abc.de` erlaubt das Laden der externen `loader.min.js`.
 - `'strict-dynamic'` erlaubt dem nonce-geladenen Rocket Loader, dynamisch weitere Inline-Skripte zu erstellen und auszuführen.
 
 Die resultierende CSP wird dann:
 ```text
-script-src 'nonce-<nonce>' https://5wn.de 'strict-dynamic'
+script-src 'nonce-<nonce>' https://abc.de 'strict-dynamic'
 ```
 
 Wenn ein eigenes Template verwendet wird, sollte es diese Daten verarbeiten:
