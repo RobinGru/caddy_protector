@@ -169,7 +169,7 @@ default-src 'none'; script-src 'nonce-<nonce>'; style-src 'nonce-<nonce>'; conne
 Wenn zusätzliche Skript-Quellen über `csp_script_src` konfiguriert wurden, werden diese an die `script-src`-Direktive angehängt, z.B.:
 
 ```text
-script-src 'nonce-<nonce>' https://5wn.de
+script-src 'nonce-<nonce>' https://abc.de
 ```
 
 Wenn ein eigenes Template verwendet wird, sollte es diese Daten verarbeiten:
