@@ -123,6 +123,9 @@ type CaddyProtector struct {
 	// TemplatePath ist der Pfad zu einem benutzerdefinierten HTML-Template.
 	TemplatePath string `json:"template,omitempty"`
 
+	// CSPScriptSrc definiert zusaetzliche Quellen, die in der script-src CSP-Direktive erlaubt werden.
+	CSPScriptSrc []string `json:"csp_script_src,omitempty"`
+
 	// DisableCSPHeader deaktiviert den von CaddyProtector gesetzten CSP-Header.
 	DisableCSPHeader bool `json:"disable_csp_header,omitempty"`
 
@@ -571,7 +574,11 @@ func (bb *CaddyProtector) serveChallenge(w http.ResponseWriter, r *http.Request,
 			http.Error(w, "Challenge-Seite konnte nicht gerendert werden", http.StatusInternalServerError)
 			return nil
 		}
-		w.Header().Set("Content-Security-Policy", fmt.Sprintf("default-src 'none'; script-src 'nonce-%s'; style-src 'nonce-%s'; connect-src 'self'; img-src 'self'; base-uri 'none'; form-action 'self'; object-src 'none';", cspNonce, cspNonce))
+		scriptSrc := fmt.Sprintf("'nonce-%s'", cspNonce)
+		for _, src := range bb.CSPScriptSrc {
+			scriptSrc += " " + src
+		}
+		w.Header().Set("Content-Security-Policy", fmt.Sprintf("default-src 'none'; script-src %s; style-src 'nonce-%s'; connect-src 'self'; img-src 'self'; base-uri 'none'; form-action 'self'; object-src 'none';", scriptSrc, cspNonce))
 		data["CSPNonce"] = template.HTMLAttr(cspNonce)
 	}
 

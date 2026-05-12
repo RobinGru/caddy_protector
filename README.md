@@ -55,7 +55,7 @@ Alternativ kann das Modul in einen bestehenden eigenen Caddy-Build eingebunden w
 
 | Direktive | Beschreibung | Standard |
 | --- | --- | --- |
-| `complexity` | Anzahl führender Null-Bits in `BLAKE3(seed || nonce)`. Unterstützt auch Placeholders wie `{vars.caddy_protector_complexity}`. `0` deaktiviert die Challenge für den Request. | `16` |
+| `complexity` | Anzahl führender Null-Bits in `BLAKE3(seed \|\| nonce)`. Unterstützt auch Placeholders wie `{vars.caddy_protector_complexity}`. `0` deaktiviert die Challenge für den Request. | `16` |
 | `valid_for` | Gültigkeitsdauer einer offenen Challenge in Sekunden. | `120` |
 | `allow_for` | Freigabedauer für erfolgreich verifizierte Clients in Sekunden. | `1800` |
 | `max_challenge_attempts` | Anzahl Challenge-Seitenabrufe innerhalb von `block_for`, bevor ein Client mit `429` blockiert wird. | `10` |
@@ -74,6 +74,7 @@ Alternativ kann das Modul in einen bestehenden eigenen Caddy-Build eingebunden w
 | `blacklist_country` | Sperrt Requests aus den angegebenen ISO-3166-1-Alpha-2-Ländern sofort. Mehrere Codes pro Direktive sind erlaubt. | - |
 | `country_url` | Lädt eine MaxMind-MMDB für Country-Lookups. | - |
 | `country_url_refresh` | Aktualisiert die MMDB periodisch in Sekunden. | deaktiviert |
+| `csp_script_src` | Fügt eine Quelle zur `script-src`-CSP-Direktive hinzu, z.B. für Cloudflare Rocket Loader. Kann mehrfach angegeben werden. | - |
 | `template` | Pfad zu einem eigenen HTML-Template. | eingebautes Template |
 | `disable_csp_header` | Deaktiviert den von der Middleware gesetzten CSP-Header. | deaktiviert |
 
@@ -163,6 +164,12 @@ Die eingebaute Challenge-Seite nutzt Inline-Styles und eingebettetes JavaScript 
 
 ```text
 default-src 'none'; script-src 'nonce-<nonce>'; style-src 'nonce-<nonce>'; connect-src 'self'; img-src 'self'; base-uri 'none'; form-action 'self'; object-src 'none';
+```
+
+Wenn zusätzliche Skript-Quellen über `csp_script_src` konfiguriert wurden, werden diese an die `script-src`-Direktive angehängt, z.B.:
+
+```text
+script-src 'nonce-<nonce>' https://5wn.de
 ```
 
 Wenn ein eigenes Template verwendet wird, sollte es diese Daten verarbeiten:
