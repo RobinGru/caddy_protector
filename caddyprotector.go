@@ -52,6 +52,8 @@ const (
 	challengeSeedLength         = 32
 	maxNonceLength              = 64
 	blake3HashBits              = 256
+	maxIPListBytes              = 10 << 20
+	maxCountryDBBytes           = 100 << 20
 )
 
 type pendingChallenge struct {
@@ -354,6 +356,9 @@ func (bb *CaddyProtector) Validate() error {
 	if err := validateCountryConfig(bb.WhitelistCountries, bb.BlacklistCountries, bb.CountryURL, bb.CountryRefresh); err != nil {
 		return err
 	}
+	if err := validateCSPScriptSrc(bb.CSPScriptSrc); err != nil {
+		return err
+	}
 	if bb.Complexity == "" {
 		return fmt.Errorf("complexity muss eine Ganzzahl oder ein Placeholder wie {vars.complexity} sein, gefunden: %s", bb.Complexity)
 	}
@@ -395,7 +400,13 @@ func (bb *CaddyProtector) ServeHTTP(w http.ResponseWriter, r *http.Request, next
 	)
 
 	complexity := bb.resolveComplexity(r, logger)
-	if r.Method == http.MethodPost && r.URL.Path == bb.VerifyPath {
+	if r.URL.Path == bb.VerifyPath {
+		if r.Method != http.MethodPost {
+			logger.Warn("Verify-Endpunkt wurde mit nicht erlaubter Methode aufgerufen", zap.String("allowed_method", http.MethodPost))
+			w.Header().Set("Allow", http.MethodPost)
+			http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+			return nil
+		}
 		if complexity == 0 {
 			logger.Warn("Verify-Endpunkt wurde trotz deaktivierter Challenge aufgerufen")
 			http.Error(w, "challenge deaktiviert", http.StatusNotFound)
@@ -731,6 +742,7 @@ func (bb *CaddyProtector) createPendingChallenge(key, returnPath string) (string
 	bb.mu.Lock()
 	defer bb.mu.Unlock()
 
+	bb.cleanupExpiredLocked(now)
 	if len(bb.pending) >= bb.MaxPendingChallenges {
 		return "", fmt.Errorf("zu viele offene Challenges")
 	}
@@ -836,6 +848,9 @@ func validateIPListConfig(kind string, inline []string, _ string, rawURL string,
 		if err != nil || parsedURL.Scheme == "" || parsedURL.Host == "" {
 			return fmt.Errorf("%s_url muss eine gueltige absolute URL sein", kind)
 		}
+		if parsedURL.Scheme != "http" && parsedURL.Scheme != "https" {
+			return fmt.Errorf("%s_url muss http oder https verwenden", kind)
+		}
 	}
 	if refresh < 0 {
 		return fmt.Errorf("%s_refresh muss groesser oder gleich 0 sein", kind)
@@ -848,11 +863,30 @@ func validateIPListConfig(kind string, inline []string, _ string, rawURL string,
 	return nil
 }
 
+func validateCSPScriptSrc(sources []string) error {
+	for _, source := range sources {
+		trimmed := strings.TrimSpace(source)
+		if trimmed == "" {
+			return fmt.Errorf("csp_script_src enthaelt eine leere Quelle")
+		}
+		if trimmed != source {
+			return fmt.Errorf("csp_script_src-Quelle darf keine fuehrenden oder folgenden Leerzeichen enthalten: %q", source)
+		}
+		if strings.ContainsAny(source, "\r\n;\x00") || strings.ContainsAny(source, " \t") {
+			return fmt.Errorf("csp_script_src-Quelle enthaelt ungueltige Zeichen: %q", source)
+		}
+	}
+	return nil
+}
+
 func validateCountryConfig(whitelist, blacklist []string, rawURL string, refresh caddy.Duration) error {
 	if rawURL != "" {
 		parsedURL, err := url.Parse(rawURL)
 		if err != nil || parsedURL.Scheme == "" || parsedURL.Host == "" {
 			return fmt.Errorf("country_url muss eine gueltige absolute URL sein")
+		}
+		if parsedURL.Scheme != "http" && parsedURL.Scheme != "https" {
+			return fmt.Errorf("country_url muss http oder https verwenden")
 		}
 	}
 	if refresh < 0 {
@@ -1106,6 +1140,14 @@ func (bb *CaddyProtector) fetchIPListURL(ctx context.Context, kind, rawURL strin
 }
 
 func (bb *CaddyProtector) fetchURLBytes(ctx context.Context, kind, rawURL string) ([]byte, error) {
+	limit := maxIPListBytes
+	if kind == "country" {
+		limit = maxCountryDBBytes
+	}
+	return bb.fetchURLBytesLimited(ctx, kind, rawURL, int64(limit))
+}
+
+func (bb *CaddyProtector) fetchURLBytesLimited(ctx context.Context, kind, rawURL string, maxBytes int64) ([]byte, error) {
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, rawURL, nil)
 	if err != nil {
 		return nil, fmt.Errorf("%s_url konnte nicht erstellt werden: %w", kind, err)
@@ -1122,9 +1164,20 @@ func (bb *CaddyProtector) fetchURLBytes(ctx context.Context, kind, rawURL string
 		return nil, fmt.Errorf("%s_url lieferte HTTP %d", kind, resp.StatusCode)
 	}
 
-	body, err := io.ReadAll(resp.Body)
+	if maxBytes <= 0 {
+		return nil, fmt.Errorf("%s_url hat ein ungueltiges Groessenlimit", kind)
+	}
+	if resp.ContentLength > maxBytes {
+		return nil, fmt.Errorf("%s_url ist zu gross: %d Bytes, erlaubt sind maximal %d Bytes", kind, resp.ContentLength, maxBytes)
+	}
+
+	limited := io.LimitReader(resp.Body, maxBytes+1)
+	body, err := io.ReadAll(limited)
 	if err != nil {
 		return nil, fmt.Errorf("%s_url konnte nicht gelesen werden: %w", kind, err)
+	}
+	if int64(len(body)) > maxBytes {
+		return nil, fmt.Errorf("%s_url ist zu gross: erlaubt sind maximal %d Bytes", kind, maxBytes)
 	}
 	return body, nil
 }

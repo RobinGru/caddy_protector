@@ -1441,6 +1441,183 @@ func TestCleanupStopsRefreshLoops(t *testing.T) {
 	}
 }
 
+func TestValidateRejectsBadCSPScriptSrc(t *testing.T) {
+	tests := []string{
+		" https://example.com",
+		"https://example.com; default-src 'none'",
+		"https://example.com\nhttps://evil.example",
+		"",
+	}
+
+	for _, source := range tests {
+		t.Run(source, func(t *testing.T) {
+			bb := newTestProtector(t)
+			bb.CSPScriptSrc = []string{source}
+
+			err := bb.Validate()
+			if err == nil {
+				t.Fatal("erwarteter Fehler fuer ungueltige csp_script_src-Quelle fehlt")
+			}
+			if !strings.Contains(err.Error(), "csp_script_src") {
+				t.Fatalf("Fehler = %v, erwartet Hinweis auf csp_script_src", err)
+			}
+		})
+	}
+}
+
+func TestValidateAcceptsSafeCSPScriptSrc(t *testing.T) {
+	bb := newTestProtector(t)
+	bb.CSPScriptSrc = []string{"https://example.com", "'strict-dynamic'"}
+
+	if err := bb.Validate(); err != nil {
+		t.Fatalf("Validate() error = %v", err)
+	}
+}
+
+func TestValidateRejectsUnsupportedListURLSchemes(t *testing.T) {
+	tests := []struct {
+		name string
+		set  func(*CaddyProtector)
+	}{
+		{name: "whitelist", set: func(bb *CaddyProtector) { bb.WhitelistURL = "ftp://example.com/goodbots.ips" }},
+		{name: "blacklist", set: func(bb *CaddyProtector) { bb.BlacklistURL = "ftp://example.com/badbots.ips" }},
+		{name: "country", set: func(bb *CaddyProtector) {
+			bb.BlacklistCountries = []string{"RU"}
+			bb.CountryURL = "ftp://example.com/GeoLite2-Country.mmdb"
+		}},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			bb := newTestProtector(t)
+			tc.set(bb)
+
+			err := bb.Validate()
+			if err == nil {
+				t.Fatal("erwarteter Fehler fuer nicht unterstuetztes URL-Schema fehlt")
+			}
+			if !strings.Contains(err.Error(), "http") {
+				t.Fatalf("Fehler = %v, erwartet Hinweis auf http/https", err)
+			}
+		})
+	}
+}
+
+func TestFetchURLBytesLimitedRejectsOversizedBody(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		_, _ = w.Write([]byte("abcdef"))
+	}))
+	defer server.Close()
+
+	bb := newTestProtector(t)
+	_, err := bb.fetchURLBytesLimited(context.Background(), "whitelist", server.URL, 5)
+	if err == nil {
+		t.Fatal("erwarteter Fehler fuer zu grosse Antwort fehlt")
+	}
+	if !strings.Contains(err.Error(), "zu gross") {
+		t.Fatalf("Fehler = %v, erwartet Hinweis auf Groessenlimit", err)
+	}
+}
+
+func TestFetchURLBytesLimitedRejectsOversizedContentLength(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Length", "6")
+		_, _ = w.Write([]byte("abc"))
+	}))
+	defer server.Close()
+
+	bb := newTestProtector(t)
+	_, err := bb.fetchURLBytesLimited(context.Background(), "country", server.URL, 5)
+	if err == nil {
+		t.Fatal("erwarteter Fehler fuer zu grosse Content-Length fehlt")
+	}
+	if !strings.Contains(err.Error(), "zu gross") {
+		t.Fatalf("Fehler = %v, erwartet Hinweis auf Groessenlimit", err)
+	}
+}
+
+func TestCreatePendingChallengeCleansExpiredBeforeLimitCheck(t *testing.T) {
+	bb := newTestProtector(t)
+	bb.MaxPendingChallenges = 1
+	key := clientKey("192.0.2.1", "UA")
+
+	bb.mu.Lock()
+	bb.pending["expired"] = pendingChallenge{
+		Key:       key,
+		Seed:      bytes.Repeat([]byte{0x01}, challengeSeedLength),
+		ExpiresAt: time.Now().Add(-time.Second),
+	}
+	bb.mu.Unlock()
+
+	seedHex, err := bb.createPendingChallenge(key, "/fresh")
+	if err != nil {
+		t.Fatalf("createPendingChallenge() sollte abgelaufene Challenge entfernen: %v", err)
+	}
+
+	bb.mu.Lock()
+	_, expiredStillPresent := bb.pending["expired"]
+	_, freshPresent := bb.pending[seedHex]
+	pendingCount := len(bb.pending)
+	bb.mu.Unlock()
+
+	if expiredStillPresent {
+		t.Fatal("abgelaufene Challenge wurde vor der Limit-Pruefung nicht entfernt")
+	}
+	if !freshPresent || pendingCount != 1 {
+		t.Fatalf("unerwarteter Pending-Zustand: freshPresent=%v count=%d", freshPresent, pendingCount)
+	}
+}
+
+func TestServeHTTPRejectsNonPostVerifyPathBeforeAllowlist(t *testing.T) {
+	bb := newTestProtector(t)
+	addr := netip.MustParseAddr("192.0.2.1")
+	bb.allowlist.Store(&ipAllowlist{exactIPs: map[netip.Addr]struct{}{addr: {}}})
+
+	req := newChallengeRequest(http.MethodGet, "http://example.com"+bb.VerifyPath, "192.0.2.1", "UA")
+	rr := httptest.NewRecorder()
+	called := false
+
+	err := bb.ServeHTTP(rr, req, caddyhttp.HandlerFunc(func(w http.ResponseWriter, r *http.Request) error {
+		called = true
+		return nil
+	}))
+	if err != nil {
+		t.Fatalf("ServeHTTP() error = %v", err)
+	}
+	if called {
+		t.Fatal("Verify-Pfad darf fuer GET nicht an den naechsten Handler weitergereicht werden")
+	}
+	if rr.Code != http.StatusMethodNotAllowed {
+		t.Fatalf("Status = %d, erwartet %d", rr.Code, http.StatusMethodNotAllowed)
+	}
+	if got := rr.Header().Get("Allow"); got != http.MethodPost {
+		t.Fatalf("Allow = %q, erwartet %q", got, http.MethodPost)
+	}
+}
+
+func TestServeHTTPRejectsHeadVerifyPathWhenComplexityIsZero(t *testing.T) {
+	bb := newTestProtector(t)
+	bb.Complexity = "0"
+
+	req := newChallengeRequest(http.MethodHead, "http://example.com"+bb.VerifyPath, "192.0.2.1", "UA")
+	rr := httptest.NewRecorder()
+	called := false
+
+	err := bb.ServeHTTP(rr, req, caddyhttp.HandlerFunc(func(w http.ResponseWriter, r *http.Request) error {
+		called = true
+		return nil
+	}))
+	if err != nil {
+		t.Fatalf("ServeHTTP() error = %v", err)
+	}
+	if called {
+		t.Fatal("Verify-Pfad darf auch bei complexity 0 nicht an den naechsten Handler weitergereicht werden")
+	}
+	if rr.Code != http.StatusMethodNotAllowed {
+		t.Fatalf("Status = %d, erwartet %d", rr.Code, http.StatusMethodNotAllowed)
+	}
+}
+
 func newTestProtector(t *testing.T) *CaddyProtector {
 	t.Helper()
 	bb := &CaddyProtector{
