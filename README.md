@@ -107,6 +107,7 @@ Verhalten:
 - Der interne `verify_path` bleibt immer intern, auch für allowlisted oder blacklisted Clients.
 - Wenn Datei- oder URL-Quellen beim Start nicht lesbar oder nicht parsebar sind, schlägt die Initialisierung fehl.
 - Wenn ein späterer Refresh fehlschlägt, bleibt die letzte gültige Liste aktiv.
+- URL-Quellen werden nur über `http` oder `https` geladen und haben interne Größenlimits, damit fehlerhafte oder kompromittierte Quellen nicht unbegrenzt Speicher verbrauchen.
 
 ## Beispiel
 
@@ -196,6 +197,14 @@ Wenn ein eigenes Template verwendet wird, sollte es diese Daten verarbeiten:
 - `.CSPNonce`
 
 `disable_csp_header` sollte nur verwendet werden, wenn an anderer Stelle eine gleichwertige CSP gesetzt wird.
+
+`csp_script_src` akzeptiert rohe CSP-Source-Tokens ohne Leerzeichen, Semikolon oder Zeilenumbruch, zum Beispiel `https://example.com` oder `'strict-dynamic'`. Unsichere oder syntaktisch kaputte Tokens werden beim Laden der Konfiguration abgelehnt.
+
+## Identität, Cookies und Proxies
+
+CaddyProtector setzt bewusst keine Cookies. Eine erfolgreiche Challenge wird serverseitig für die Kombination aus erkannter Client-IP und User-Agent freigegeben. Das vermeidet Tracking- oder Consent-Fragen durch eigene Cookies, hat aber einen Trade-off: Teilen sich mehrere Nutzer dieselbe aus Caddy-Sicht sichtbare IP und denselben User-Agent, kann eine gelöste Challenge innerhalb von `allow_for` auch für diese Kombination wirken. Umgekehrt müssen Nutzer nach einem IP-Wechsel erneut eine Challenge lösen.
+
+Bei Betrieb hinter Reverse Proxies, Load Balancern oder CDNs ist deshalb besonders wichtig, dass Caddy die echte Client-IP nur aus vertrauenswürdigen Proxy-Headern übernimmt. Konfigurieren Sie die Proxy-Kette in Caddy korrekt, damit `client_ip`, Allowlist, Blacklist, Country-Regeln und Challenge-Freigaben nicht auf der IP des vorgeschalteten Proxys basieren.
 
 ## Browser-Bundle
 
