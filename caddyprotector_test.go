@@ -455,6 +455,50 @@ func TestCreatePendingChallengeStoresReturnPath(t *testing.T) {
 	}
 }
 
+func TestSafeReturnPathFrom(t *testing.T) {
+	tests := []struct {
+		input string
+		want  string
+	}{
+		{"/", "/"},
+		{"/2026-domaintester/", "/2026-domaintester/"},
+		{"/2026-domaintester", "/2026-domaintester"},
+		{"/2026-domaintester/page?q=1", "/2026-domaintester/page?q=1"},
+		{"/2026-domaintester/", "/2026-domaintester/"},
+		{"//evil.example/path", "/"},
+		{"/foo/bar/../baz", "/foo/baz"},
+		{"/foo/./bar", "/foo/bar"},
+		{"", "/"},
+	}
+	for _, tc := range tests {
+		t.Run(tc.input, func(t *testing.T) {
+			if got := safeReturnPathFrom(tc.input); got != tc.want {
+				t.Fatalf("safeReturnPathFrom(%q) = %q, want %q", tc.input, got, tc.want)
+			}
+		})
+	}
+}
+
+func TestGetOriginalPathUsesOrigURIFromReplacer(t *testing.T) {
+	bb := newTestProtector(t)
+	req := newChallengeRequest(http.MethodGet, "http://example.com/", "192.0.2.1", "UA")
+	repl, _ := req.Context().Value(caddy.ReplacerCtxKey).(*caddy.Replacer)
+	repl.Set("http.request.orig_uri", "/2026-domaintester/?x=1")
+
+	if got := bb.getOriginalPath(req); got != "/2026-domaintester/?x=1" {
+		t.Fatalf("getOriginalPath() = %q, erwartet /2026-domaintester/?x=1", got)
+	}
+}
+
+func TestGetOriginalPathFallsBackWhenNoOrigURI(t *testing.T) {
+	bb := newTestProtector(t)
+	req := newChallengeRequest(http.MethodGet, "http://example.com/protected?x=1", "192.0.2.1", "UA")
+
+	if got := bb.getOriginalPath(req); got != "/protected?x=1" {
+		t.Fatalf("getOriginalPath() = %q, erwartet /protected?x=1", got)
+	}
+}
+
 func TestSafeReturnPathRejectsSchemeRelativePath(t *testing.T) {
 	req := newChallengeRequest(http.MethodGet, "http://example.com//evil.example/path?token=secret", "192.0.2.1", "UA")
 

@@ -501,8 +501,7 @@ func isJSONContentType(contentType string) bool {
 	return err == nil && strings.EqualFold(mediaType, "application/json")
 }
 
-func safeReturnPath(r *http.Request) string {
-	returnPath := r.URL.RequestURI()
+func safeReturnPathFrom(returnPath string) string {
 	if returnPath == "" || returnPath[0] != '/' || strings.HasPrefix(returnPath, "//") {
 		return "/"
 	}
@@ -522,6 +521,27 @@ func safeReturnPath(r *http.Request) string {
 		return cleanPath + "?" + parts[1]
 	}
 	return cleanPath
+}
+
+func safeReturnPath(r *http.Request) string {
+	return safeReturnPathFrom(r.URL.RequestURI())
+}
+
+// getOriginalPath ermittelt den ursprünglichen Pfad aus dem Caddy-Replacer,
+// falls verfügbar. Dies ist notwendig, wenn Caddy's handle_path den
+// r.URL.Path modifiziert hat (z. B. /2026-domaintester/ -> /).
+// Fallback ist der aktuelle r.URL.RequestURI().
+func (bb *CaddyProtector) getOriginalPath(r *http.Request) string {
+	if repl, ok := r.Context().Value(caddy.ReplacerCtxKey).(*caddy.Replacer); ok && repl != nil {
+		val, found := repl.Get("http.request.orig_uri")
+		if found {
+			origURI, ok := val.(string)
+			if ok && origURI != "" && origURI[0] == '/' {
+				return safeReturnPathFrom(origURI)
+			}
+		}
+	}
+	return safeReturnPath(r)
 }
 
 func redactURLForLog(u *url.URL) string {
@@ -554,7 +574,7 @@ func redactPathForLog(raw string) string {
 }
 
 func (bb *CaddyProtector) serveChallenge(w http.ResponseWriter, r *http.Request, key string, complexity int) error {
-	seedHex, err := bb.createPendingChallenge(key, safeReturnPath(r))
+	seedHex, err := bb.createPendingChallenge(key, bb.getOriginalPath(r))
 	if err != nil {
 		bb.logger.Error("Challenge konnte nicht erstellt werden", zap.Error(err))
 		http.Error(w, "Seed-Erzeugung fehlgeschlagen", http.StatusInternalServerError)
