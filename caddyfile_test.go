@@ -65,10 +65,10 @@ caddy_protector {
 	if bb.CookieDomain != "example.com" {
 		t.Fatalf("CookieDomain = %q", bb.CookieDomain)
 	}
-	if bb.CookieSecure {
+	if bb.CookieSecure == nil || *bb.CookieSecure {
 		t.Fatal("CookieSecure sollte false sein")
 	}
-	if bb.CookieHTTPOnly {
+	if bb.CookieHTTPOnly == nil || *bb.CookieHTTPOnly {
 		t.Fatal("CookieHTTPOnly sollte false sein")
 	}
 	if bb.CookieSameSite != "Strict" {
