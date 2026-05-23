@@ -1014,10 +1014,26 @@ func TestServeHTTPDropsBuiltInPathRuleByDefault(t *testing.T) {
 	}
 }
 
+func TestServeHTTPDropsBuiltInPathRuleAfterOneDecode(t *testing.T) {
+	bb := newTestProtector(t)
+	req := newChallengeRequest(http.MethodGet, "http://example.com/%2egit/config", "192.0.2.1", "UA")
+	rr := newHijackableResponseWriter()
+
+	err := bb.ServeHTTP(rr, req, caddyhttp.HandlerFunc(func(w http.ResponseWriter, r *http.Request) error {
+		t.Fatal("next handler sollte bei URL-kodierter built-in path rule nicht aufgerufen werden")
+		return nil
+	}))
+	if err != nil {
+		t.Fatalf("ServeHTTP() error = %v", err)
+	}
+	if !rr.conn.closed {
+		t.Fatal("Verbindung sollte bei URL-kodierter built-in path rule geschlossen werden")
+	}
+}
+
 func TestServeHTTPDisablesBuiltInHeaderRuleWhenConfiguredOff(t *testing.T) {
 	bb := newTestProtector(t)
-	bb.BuiltInRules = false
-	bb.builtInRulesSet = true
+	bb.BuiltInRules = boolPtr(false)
 	if err := bb.Validate(); err != nil {
 		t.Fatalf("Validate() error = %v", err)
 	}
@@ -1039,6 +1055,66 @@ func TestServeHTTPDisablesBuiltInHeaderRuleWhenConfiguredOff(t *testing.T) {
 	}
 	if got := rr.Header().Get("X-Bot-Barrier"); got != "challenge" {
 		t.Fatalf("X-Bot-Barrier = %q, erwartet challenge", got)
+	}
+}
+
+func TestServeHTTPDoesNotApplyAggressiveBuiltInPathRuleByDefault(t *testing.T) {
+	bb := newTestProtector(t)
+	req := newChallengeRequest(http.MethodGet, "http://example.com/graphql", "192.0.2.1", "UA")
+	rr := httptest.NewRecorder()
+
+	err := bb.ServeHTTP(rr, req, caddyhttp.HandlerFunc(func(w http.ResponseWriter, r *http.Request) error {
+		t.Fatal("ohne Cookie sollte weiterhin die Challenge ausgeliefert werden, nicht der Upstream")
+		return nil
+	}))
+	if err != nil {
+		t.Fatalf("ServeHTTP() error = %v", err)
+	}
+	if got := rr.Header().Get("X-Bot-Barrier"); got != "challenge" {
+		t.Fatalf("X-Bot-Barrier = %q, erwartet challenge", got)
+	}
+}
+
+func TestServeHTTPAppliesAggressiveBuiltInPathRuleWhenEnabled(t *testing.T) {
+	bb := newTestProtector(t)
+	bb.AggressiveBuiltInRules = boolPtr(true)
+	if err := bb.Validate(); err != nil {
+		t.Fatalf("Validate() error = %v", err)
+	}
+
+	req := newChallengeRequest(http.MethodGet, "http://example.com/graphql", "192.0.2.1", "UA")
+	rr := newHijackableResponseWriter()
+
+	err := bb.ServeHTTP(rr, req, caddyhttp.HandlerFunc(func(w http.ResponseWriter, r *http.Request) error {
+		t.Fatal("next handler sollte bei aggressive built-in path rule nicht aufgerufen werden")
+		return nil
+	}))
+	if err != nil {
+		t.Fatalf("ServeHTTP() error = %v", err)
+	}
+	if !rr.conn.closed {
+		t.Fatal("Verbindung sollte bei aggressive built-in path rule geschlossen werden")
+	}
+}
+
+func TestServeHTTPAppliesRequestRulesBeforeAllowlist(t *testing.T) {
+	bb := newTestProtector(t)
+	bb.allowlist.Store(&ipAllowlist{exactIPs: map[netip.Addr]struct{}{
+		netip.MustParseAddr("192.0.2.1"): {},
+	}})
+
+	req := newChallengeRequest(http.MethodGet, "http://example.com/.git/config", "192.0.2.1", "UA")
+	rr := newHijackableResponseWriter()
+
+	err := bb.ServeHTTP(rr, req, caddyhttp.HandlerFunc(func(w http.ResponseWriter, r *http.Request) error {
+		t.Fatal("Allowlist darf Built-in Request-Regeln nicht uebersteuern")
+		return nil
+	}))
+	if err != nil {
+		t.Fatalf("ServeHTTP() error = %v", err)
+	}
+	if !rr.conn.closed {
+		t.Fatal("Built-in Request-Regeln sollten vor Allowlist schliessen")
 	}
 }
 

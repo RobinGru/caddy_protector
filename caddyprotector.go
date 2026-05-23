@@ -74,10 +74,8 @@ var (
 		"/.history",
 		"/.well-known/acme-challenge/..",
 		"/_ignition/execute-solution",
-		"/actuator",
 		"/adminer",
 		"/api/jsonws",
-		"/api/v4",
 		"/autodiscover",
 		"/boaform",
 		"/cgi-bin",
@@ -85,7 +83,6 @@ var (
 		"/debug/default",
 		"/ews",
 		"/geoserver",
-		"/graphql",
 		"/h2-console",
 		"/hnap1",
 		"/hudson",
@@ -106,11 +103,16 @@ var (
 		"/vendor/phpunit",
 		"/webdav",
 		"/wp-admin",
+		"/wp-login.php",
+		"/xmlrpc.php",
+	}
+	aggressiveBuiltInDenyPathPrefixes = []string{
+		"/actuator",
+		"/api/v4",
+		"/graphql",
 		"/wp-content",
 		"/wp-includes",
 		"/wp-json",
-		"/wp-login.php",
-		"/xmlrpc.php",
 	}
 	builtInDenyQuerySubstrings = []string{
 		"../",
@@ -162,6 +164,8 @@ var (
 		"file://",
 		"gopher://",
 		"expect://",
+	}
+	aggressiveBuiltInDenyQuerySubstrings = []string{
 		"exec(",
 	}
 	builtInDenyHeaderSubstrings = []HeaderSubstringRule{
@@ -305,7 +309,10 @@ type CaddyProtector struct {
 	CookieSameSite string `json:"cookie_same_site,omitempty"`
 
 	// BuiltInRules aktiviert einfache eingebaute Scanner-/Exploit-Heuristiken.
-	BuiltInRules bool `json:"built_in_rules,omitempty"`
+	BuiltInRules *bool `json:"built_in_rules,omitempty"`
+
+	// AggressiveBuiltInRules aktiviert breitere Built-ins mit hoeherem False-Positive-Risiko.
+	AggressiveBuiltInRules *bool `json:"aggressive_built_in_rules,omitempty"`
 
 	// DenyPathPrefixes sperrt Requests mit passenden Pfad-Präfixen.
 	DenyPathPrefixes []string `json:"deny_path_prefix,omitempty"`
@@ -375,7 +382,6 @@ type CaddyProtector struct {
 	compiledPathRules   []compiledStringRule
 	compiledQueryRules  []compiledStringRule
 	compiledHeaderRules []compiledHeaderRule
-	builtInRulesSet     bool
 }
 
 func (*CaddyProtector) CaddyModule() caddy.ModuleInfo {
@@ -416,8 +422,11 @@ func (bb *CaddyProtector) Provision(ctx caddy.Context) error {
 	if bb.CookieSameSite == "" {
 		bb.CookieSameSite = "Lax"
 	}
-	if !bb.builtInRulesSet && !bb.BuiltInRules {
-		bb.BuiltInRules = true
+	if bb.BuiltInRules == nil {
+		bb.BuiltInRules = boolPtr(true)
+	}
+	if bb.AggressiveBuiltInRules == nil {
+		bb.AggressiveBuiltInRules = boolPtr(false)
 	}
 	if err := bb.Validate(); err != nil {
 		return err
@@ -479,7 +488,8 @@ func (bb *CaddyProtector) Provision(ctx caddy.Context) error {
 		zap.Bool("cookie_secure", bb.cookieSecureValue()),
 		zap.Bool("cookie_http_only", bb.cookieHTTPOnlyValue()),
 		zap.String("cookie_same_site", bb.CookieSameSite),
-		zap.Bool("built_in_rules", bb.BuiltInRules),
+		zap.Bool("built_in_rules", bb.builtInRulesEnabled()),
+		zap.Bool("aggressive_built_in_rules", bb.aggressiveBuiltInRulesEnabled()),
 		zap.Strings("whitelist_ips", bb.WhitelistIPs),
 		zap.String("whitelist_file", bb.WhitelistFile),
 		zap.String("whitelist_url", bb.WhitelistURL),
@@ -498,8 +508,11 @@ func (bb *CaddyProtector) Provision(ctx caddy.Context) error {
 
 // Validate prüft die Konfiguration.
 func (bb *CaddyProtector) Validate() error {
-	if !bb.builtInRulesSet && !bb.BuiltInRules {
-		bb.BuiltInRules = true
+	if bb.BuiltInRules == nil {
+		bb.BuiltInRules = boolPtr(true)
+	}
+	if bb.AggressiveBuiltInRules == nil {
+		bb.AggressiveBuiltInRules = boolPtr(false)
 	}
 	whitelistCountries, err := normalizeCountryCodes("whitelist_country", bb.WhitelistCountries)
 	if err != nil {
@@ -757,8 +770,10 @@ func normalizeRuleValue(kind, raw string) (string, error) {
 }
 
 func (bb *CaddyProtector) compileRequestRules() error {
-	pathRules := make([]compiledStringRule, 0, len(bb.DenyPathPrefixes)+len(builtInDenyPathPrefixes))
-	queryRules := make([]compiledStringRule, 0, len(bb.DenyQuerySubstrings)+len(builtInDenyQuerySubstrings))
+	pathCapacity := len(bb.DenyPathPrefixes) + len(builtInDenyPathPrefixes) + len(aggressiveBuiltInDenyPathPrefixes)
+	queryCapacity := len(bb.DenyQuerySubstrings) + len(builtInDenyQuerySubstrings) + len(aggressiveBuiltInDenyQuerySubstrings)
+	pathRules := make([]compiledStringRule, 0, pathCapacity)
+	queryRules := make([]compiledStringRule, 0, queryCapacity)
 	headerRules := make([]compiledHeaderRule, 0, len(bb.DenyHeaderSubstrings)+len(builtInDenyHeaderSubstrings))
 
 	for _, raw := range bb.DenyPathPrefixes {
@@ -788,7 +803,7 @@ func (bb *CaddyProtector) compileRequestRules() error {
 		headerRules = append(headerRules, compiledHeaderRule{Name: name, Needle: needle, Source: "config"})
 	}
 
-	if bb.BuiltInRules {
+	if bb.builtInRulesEnabled() {
 		for _, raw := range builtInDenyPathPrefixes {
 			pathRules = append(pathRules, compiledStringRule{Value: raw, Source: "builtin"})
 		}
@@ -803,6 +818,14 @@ func (bb *CaddyProtector) compileRequestRules() error {
 			})
 		}
 	}
+	if bb.aggressiveBuiltInRulesEnabled() {
+		for _, raw := range aggressiveBuiltInDenyPathPrefixes {
+			pathRules = append(pathRules, compiledStringRule{Value: raw, Source: "builtin_aggressive"})
+		}
+		for _, raw := range aggressiveBuiltInDenyQuerySubstrings {
+			queryRules = append(queryRules, compiledStringRule{Value: raw, Source: "builtin_aggressive"})
+		}
+	}
 
 	bb.compiledPathRules = pathRules
 	bb.compiledQueryRules = queryRules
@@ -815,10 +838,15 @@ func (bb *CaddyProtector) matchRequestRules(r *http.Request) (requestRuleMatch, 
 	if pathValue == "" {
 		pathValue = r.URL.Path
 	}
-	pathValue = strings.ToLower(pathValue)
+	pathValues := []string{strings.ToLower(pathValue)}
+	if unescaped, err := url.PathUnescape(pathValue); err == nil && unescaped != pathValue {
+		pathValues = append(pathValues, strings.ToLower(unescaped))
+	}
 	for _, rule := range bb.compiledPathRules {
-		if strings.HasPrefix(pathValue, rule.Value) {
-			return requestRuleMatch{Source: rule.Source, Type: "path_prefix"}, true
+		for _, value := range pathValues {
+			if strings.HasPrefix(value, rule.Value) {
+				return requestRuleMatch{Source: rule.Source, Type: "path_prefix"}, true
+			}
 		}
 	}
 
@@ -1087,6 +1115,14 @@ func (bb *CaddyProtector) writeAllowCookie(w http.ResponseWriter, now time.Time)
 
 func boolPtr(v bool) *bool {
 	return &v
+}
+
+func (bb *CaddyProtector) builtInRulesEnabled() bool {
+	return bb.BuiltInRules != nil && *bb.BuiltInRules
+}
+
+func (bb *CaddyProtector) aggressiveBuiltInRulesEnabled() bool {
+	return bb.AggressiveBuiltInRules != nil && *bb.AggressiveBuiltInRules
 }
 
 func (bb *CaddyProtector) cookieSecureValue() bool {

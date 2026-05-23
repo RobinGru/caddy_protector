@@ -121,8 +121,13 @@ func (bb *CaddyProtector) UnmarshalCaddyfile(d *caddyfile.Dispenser) error {
 				if err != nil {
 					return d.Errf("ungueltiger built_in_rules-Wert: %v", err)
 				}
-				bb.BuiltInRules = value
-				bb.builtInRulesSet = true
+				bb.BuiltInRules = &value
+			case "aggressive_built_in_rules":
+				value, err := strconv.ParseBool(arg)
+				if err != nil {
+					return d.Errf("ungueltiger aggressive_built_in_rules-Wert: %v", err)
+				}
+				bb.AggressiveBuiltInRules = &value
 			case "cookie_same_site":
 				bb.CookieSameSite = arg
 			case "verify_path":

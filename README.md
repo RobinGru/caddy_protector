@@ -62,6 +62,7 @@ Alternativ kann das Modul in einen bestehenden eigenen Caddy-Build eingebunden w
 | `cookie_http_only` | Setzt das `HttpOnly`-Flag des Freigabe-Cookies. | `true` |
 | `cookie_same_site` | `Lax`, `Strict` oder `None` für das Freigabe-Cookie. | `Lax` |
 | `built_in_rules` | Aktiviert einfache eingebaute Regeln für offensichtige Scanner-Ziele und grobe Exploit-Indikatoren. | `true` |
+| `aggressive_built_in_rules` | Aktiviert breitere eingebaute Regeln mit höherem False-Positive-Risiko, z.B. für `/graphql`, `/api/v4` oder `/wp-content`. | `false` |
 | `verify_path` | Interner `POST`-Endpunkt für die Verifikation. | `/__caddy_protector/verify` |
 | `deny_path_prefix` | Sperrt Requests mit passendem Pfad-Präfix. Case-insensitive. Kann mehrfach angegeben werden. | - |
 | `deny_query_substring` | Sperrt Requests mit passendem Query-Teilstring. Prüft Raw Query und eine URL-dekodierte Variante. Case-insensitive. Kann mehrfach angegeben werden. | - |
@@ -90,7 +91,7 @@ Alternativ kann das Modul in einen bestehenden eigenen Caddy-Build eingebunden w
 - Genau eines von `secret` oder `secret_file` muss gesetzt sein.
 - `cookie_path` muss mit `/` beginnen.
 - `cookie_same_site` muss `Lax`, `Strict` oder `None` sein.
-- `built_in_rules` akzeptiert `true` oder `false`.
+- `built_in_rules` und `aggressive_built_in_rules` akzeptieren `true` oder `false`.
 - `deny_path_prefix`, `deny_query_substring` und `deny_header_substring` lehnen leere Werte ab.
 - `deny_header_substring` erwartet genau zwei Argumente: Header-Name und Teilstring.
 - Teilstrings mit Leerzeichen müssen im Caddyfile quoted werden, zum Beispiel `deny_query_substring "union select"`.
@@ -101,11 +102,13 @@ Alternativ kann das Modul in einen bestehenden eigenen Caddy-Build eingebunden w
 
 Die Request-Regeln sind bewusst grob und billig. Sie sollen offensichtige Scanner-Ziele und primitive Exploit-Strings früh verwerfen. Sie sind keine vollwertige WAF und kein Ersatz für CRS.
 
-Wenn `built_in_rules true` aktiv ist, werden zusätzlich größere eingebaute Heuristiken geladen. Die Listen decken jetzt grob die häufigsten Scanner-Ziele und Exploit-Indikatoren in Pfad und Query ab:
+Wenn `built_in_rules true` aktiv ist, werden zusätzlich eingebaute Heuristiken geladen. Die Default-Liste bleibt auf relativ klare Scanner-Ziele und Exploit-Indikatoren begrenzt:
 
-- Pfad-Präfixe wie `/.git`, `/.env`, `/wp-admin`, `/phpmyadmin`, `/cgi-bin`, `/actuator`, `/manager/html`, `/vendor/phpunit` oder `/h2-console`
+- Pfad-Präfixe wie `/.git`, `/.env`, `/wp-admin`, `/phpmyadmin`, `/cgi-bin`, `/manager/html`, `/vendor/phpunit` oder `/h2-console`
 - Query-Indikatoren wie `../`, `%2e%2e%2f`, `<script`, `union select`, `${jndi:`, `or 1=1`, `/etc/passwd`, `cmd.exe`, `php://` oder `gopher://`
 - Header-Indikatoren wie `User-Agent: sqlmap`, `nuclei`, `nikto`, `gobuster` oder Rewrite-Header mit `../`
+
+`aggressive_built_in_rules true` ergänzt breitere Pfad- und Query-Treffer wie `/graphql`, `/api/v4`, `/wp-content` oder `exec(`. Das kann für reine Public-Websites sinnvoll sein, sollte bei APIs, WordPress-Frontends oder Admin-Oberflächen aber bewusst getestet werden.
 
 Treffer werden wie die IP-Blacklist behandelt: Der Request wird still verworfen, bevor Challenge, Cookie, Allowlist oder Upstream ins Spiel kommen.
 
@@ -153,6 +156,7 @@ example.com {
     cookie_http_only true
     cookie_same_site Lax
     built_in_rules true
+    aggressive_built_in_rules false
     verify_path /__caddy_protector/verify
 
     deny_path_prefix /internal/debug

@@ -25,6 +25,7 @@ caddy_protector {
 	cookie_http_only false
 	cookie_same_site Strict
 	built_in_rules false
+	aggressive_built_in_rules true
 	verify_path /__caddy_protector/verify
 	deny_path_prefix /wp-admin
 	deny_path_prefix /.git
@@ -81,8 +82,11 @@ caddy_protector {
 	if bb.CookieSameSite != "Strict" {
 		t.Fatalf("CookieSameSite = %q", bb.CookieSameSite)
 	}
-	if bb.BuiltInRules {
+	if bb.BuiltInRules == nil || *bb.BuiltInRules {
 		t.Fatal("BuiltInRules sollte false sein")
+	}
+	if bb.AggressiveBuiltInRules == nil || !*bb.AggressiveBuiltInRules {
+		t.Fatal("AggressiveBuiltInRules sollte true sein")
 	}
 	if got := strings.Join(bb.DenyPathPrefixes, ","); got != "/wp-admin,/.git" {
 		t.Fatalf("DenyPathPrefixes = %q", got)
@@ -145,8 +149,11 @@ caddy_protector {
 
 func TestUnmarshalCaddyfileDefaultsBuiltInRulesToValidatePhase(t *testing.T) {
 	bb := newTestProtector(t)
-	if !bb.BuiltInRules {
+	if !bb.builtInRulesEnabled() {
 		t.Fatal("BuiltInRules sollte standardmaessig aktiv sein")
+	}
+	if bb.aggressiveBuiltInRulesEnabled() {
+		t.Fatal("AggressiveBuiltInRules sollte standardmaessig deaktiviert sein")
 	}
 }
 
@@ -164,6 +171,23 @@ caddy_protector {
 	}
 	if !strings.Contains(err.Error(), "built_in_rules-Wert") {
 		t.Fatalf("Fehler = %v, erwartet Hinweis auf built_in_rules", err)
+	}
+}
+
+func TestUnmarshalCaddyfileRejectsBadAggressiveBuiltInRulesValue(t *testing.T) {
+	input := `
+caddy_protector {
+	aggressive_built_in_rules kaputt
+}
+`
+
+	var bb CaddyProtector
+	err := bb.UnmarshalCaddyfile(caddyfile.NewTestDispenser(input))
+	if err == nil {
+		t.Fatal("erwarteter Fehler fuer ungueltigen aggressive_built_in_rules-Wert fehlt")
+	}
+	if !strings.Contains(err.Error(), "aggressive_built_in_rules-Wert") {
+		t.Fatalf("Fehler = %v, erwartet Hinweis auf aggressive_built_in_rules", err)
 	}
 }
 
