@@ -101,10 +101,10 @@ Alternativ kann das Modul in einen bestehenden eigenen Caddy-Build eingebunden w
 
 Die Request-Regeln sind bewusst grob und billig. Sie sollen offensichtige Scanner-Ziele und primitive Exploit-Strings früh verwerfen. Sie sind keine vollwertige WAF und kein Ersatz für CRS.
 
-Wenn `built_in_rules true` aktiv ist, werden zusätzlich kleine eingebaute Heuristiken geladen:
+Wenn `built_in_rules true` aktiv ist, werden zusätzlich größere eingebaute Heuristiken geladen. Die Listen decken jetzt grob die häufigsten Scanner-Ziele und Exploit-Indikatoren in Pfad und Query ab:
 
-- Pfad-Präfixe wie `/.git`, `/.env`, `/wp-admin`, `/phpmyadmin` oder `/vendor/phpunit`
-- Query-Indikatoren wie `../`, `%2e%2e%2f`, `<script`, `union select`, `${jndi:`, `/etc/passwd` oder `cmd.exe`
+- Pfad-Präfixe wie `/.git`, `/.env`, `/wp-admin`, `/phpmyadmin`, `/cgi-bin`, `/actuator`, `/manager/html`, `/vendor/phpunit` oder `/h2-console`
+- Query-Indikatoren wie `../`, `%2e%2e%2f`, `<script`, `union select`, `${jndi:`, `or 1=1`, `/etc/passwd`, `cmd.exe`, `php://` oder `gopher://`
 - Header-Indikatoren wie `User-Agent: sqlmap`, `nuclei`, `nikto`, `gobuster` oder Rewrite-Header mit `../`
 
 Treffer werden wie die IP-Blacklist behandelt: Der Request wird still verworfen, bevor Challenge, Cookie, Allowlist oder Upstream ins Spiel kommen.
