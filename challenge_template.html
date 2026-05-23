@@ -3,29 +3,54 @@
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <meta name="color-scheme" content="light dark">
   <title>Sicherheitsprüfung läuft...</title>
   <style nonce="{{ .CSPNonce }}">
     :root {
-      color-scheme: light;
-      font-family: "Segoe UI", "Helvetica Neue", Arial, sans-serif;
-      --bg-top: #f8fbff;
-      --bg-bottom: #eef4ff;
-      --panel: rgba(255, 255, 255, 0.9);
-      --panel-border: rgba(25, 60, 110, 0.12);
-      --text: #122033;
-      --muted: #5b6b82;
-      --accent: #1f6feb;
-      --accent-soft: rgba(31, 111, 235, 0.14);
-      --shadow: 0 24px 80px rgba(18, 32, 51, 0.12);
-      background:
-        radial-gradient(circle at 15% 20%, rgba(31, 111, 235, 0.16), transparent 30%),
-        radial-gradient(circle at 85% 15%, rgba(16, 185, 129, 0.12), transparent 24%),
-        linear-gradient(180deg, var(--bg-top) 0%, var(--bg-bottom) 100%);
-      color: var(--text);
+      color-scheme: light dark;
+      font-family: "Aptos", "Segoe UI", "Helvetica Neue", Arial, sans-serif;
+      --bg: #f6f7f8;
+      --surface: rgba(255, 255, 255, 0.88);
+      --surface-muted: #eef3f1;
+      --border: rgba(23, 26, 31, 0.14);
+      --border-strong: rgba(23, 26, 31, 0.22);
+      --text: #171a1f;
+      --muted: #4f5b57;
+      --soft: #6a7470;
+      --accent: #007c72;
+      --accent-strong: #005f57;
+      --accent-soft: rgba(0, 124, 114, 0.12);
+      --warning: #b45f06;
+      --shadow: 0 20px 58px rgba(17, 24, 39, 0.12);
+      --radius: 8px;
+      --focus: 0 0 0 4px rgba(0, 124, 114, 0.2);
+    }
+
+    @media (prefers-color-scheme: dark) {
+      :root {
+        --bg: #101412;
+        --surface: rgba(24, 30, 28, 0.9);
+        --surface-muted: #202824;
+        --border: rgba(229, 231, 235, 0.14);
+        --border-strong: rgba(229, 231, 235, 0.22);
+        --text: #f4f7f5;
+        --muted: #c3ccc8;
+        --soft: #98a49f;
+        --accent: #42d8c4;
+        --accent-strong: #8ff0e2;
+        --accent-soft: rgba(66, 216, 196, 0.13);
+        --warning: #f2b35d;
+        --shadow: 0 22px 68px rgba(0, 0, 0, 0.34);
+        --focus: 0 0 0 4px rgba(66, 216, 196, 0.24);
+      }
     }
 
     * {
       box-sizing: border-box;
+    }
+
+    html {
+      font-size: 100%;
     }
 
     body {
@@ -33,140 +58,200 @@
       margin: 0;
       display: grid;
       place-items: center;
-      padding: 24px 18px;
+      padding: 1rem;
+      background: var(--bg);
+      color: var(--text);
+      text-rendering: optimizeLegibility;
     }
 
-    .card {
-      position: relative;
-      width: min(100%, 720px);
-      padding: 36px;
-      border: 1px solid var(--panel-border);
-      border-radius: 28px;
-      background: var(--panel);
+    .challenge {
+      width: min(100%, 40rem);
+      border: 1px solid var(--border);
+      border-radius: var(--radius);
+      background: var(--surface);
       box-shadow: var(--shadow);
-      backdrop-filter: blur(10px);
-      overflow: hidden;
+      backdrop-filter: blur(18px) saturate(140%);
     }
 
-    .card::before {
-      content: "";
-      position: absolute;
-      inset: 0 0 auto 0;
-      height: 6px;
-      background: linear-gradient(90deg, #1f6feb 0%, #35c2ff 55%, #22c55e 100%);
+    .content {
+      display: grid;
+      gap: 1.25rem;
+      padding: 1.5rem;
     }
 
-    .eyebrow {
+    .topline {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 1rem;
+    }
+
+    .badge {
       display: inline-flex;
       align-items: center;
-      gap: 8px;
-      margin: 0 0 18px;
-      padding: 8px 12px;
-      border-radius: 999px;
-      background: var(--accent-soft);
-      color: var(--accent);
-      font-size: 0.92rem;
+      gap: 0.55rem;
+      min-height: 2rem;
+      color: var(--accent-strong);
+      font-size: 0.875rem;
       font-weight: 700;
-      letter-spacing: 0.02em;
+      letter-spacing: 0;
     }
 
-    .eyebrow::before {
+    .badge::before {
       content: "";
-      width: 10px;
-      height: 10px;
-      border-radius: 999px;
-      background: currentColor;
-      box-shadow: 0 0 0 6px rgba(31, 111, 235, 0.14);
+      width: 0.625rem;
+      height: 0.625rem;
+      border-radius: 50%;
+      background: var(--accent);
+      box-shadow: 0 0 0 0.35rem var(--accent-soft);
+      flex: 0 0 auto;
+    }
+
+    .secure-label {
+      color: var(--soft);
+      font-size: 0.875rem;
+      line-height: 1.4;
+      white-space: nowrap;
     }
 
     h1 {
-      margin: 0 0 14px;
-      font-size: clamp(2rem, 4vw, 3rem);
-      font-weight: 800;
-      letter-spacing: -0.03em;
-      line-height: 1.08;
+      margin: 0;
+      font-size: 2.25rem;
+      line-height: 1.12;
+      letter-spacing: 0;
+      text-wrap: balance;
     }
 
     .lead {
       margin: 0;
-      max-width: 56ch;
-      font-size: 1.08rem;
+      max-width: 58ch;
+      color: var(--muted);
+      font-size: 1rem;
       line-height: 1.65;
-      color: var(--muted);
     }
 
-    .info {
-      margin-top: 24px;
-      padding: 18px 20px;
-      border-radius: 18px;
-      background: rgba(255, 255, 255, 0.72);
-      border: 1px solid rgba(25, 60, 110, 0.08);
-    }
-
-    .info strong {
-      display: block;
-      margin-bottom: 6px;
-      font-size: 0.98rem;
-      color: var(--text);
-    }
-
-    .info p {
-      margin: 0;
-      font-size: 0.98rem;
-      line-height: 1.6;
-      color: var(--muted);
-    }
-
-    .progress {
+    .status-card {
       display: grid;
-      grid-template-columns: 72px 1fr;
-      gap: 18px;
+      gap: 1rem;
+      padding: 1rem;
+      border: 1px solid var(--border-strong);
+      border-radius: var(--radius);
+      background: var(--surface-muted);
+    }
+
+    .status-row {
+      display: grid;
+      grid-template-columns: auto 1fr;
+      gap: 0.9rem;
       align-items: center;
-      margin-top: 28px;
-      padding: 18px 20px;
-      border-radius: 22px;
-      background: linear-gradient(180deg, rgba(255, 255, 255, 0.95), rgba(242, 247, 255, 0.95));
-      border: 1px solid rgba(25, 60, 110, 0.1);
     }
 
     .spinner {
-      width: 56px;
-      height: 56px;
-      margin: 0 auto;
-      border-radius: 50%;
-      border: 5px solid rgba(31, 111, 235, 0.14);
+      position: relative;
+      width: 3rem;
+      height: 3rem;
+      border: 0.25rem solid var(--accent-soft);
       border-top-color: var(--accent);
-      border-right-color: #35c2ff;
+      border-radius: 50%;
       animation: spin 0.9s linear infinite;
     }
 
-    .progress-copy strong {
-      display: block;
-      margin-bottom: 4px;
-      font-size: 1rem;
-      color: var(--text);
+    .spinner::after {
+      content: "";
+      position: absolute;
+      inset: 0.55rem;
+      border-radius: inherit;
+      border: 1px solid var(--border);
+      background: var(--surface);
     }
 
-    .progress-copy p {
+    .status-copy {
+      display: grid;
+      gap: 0.25rem;
+      min-width: 0;
+    }
+
+    .status-heading {
       margin: 0;
-      font-size: 0.95rem;
-      line-height: 1.55;
-      color: var(--muted);
+      font-size: 1.125rem;
+      font-weight: 800;
+      line-height: 1.25;
     }
 
     .status {
-      margin-top: 12px;
-      min-height: 1.6em;
+      min-height: 1.5rem;
+      color: var(--accent-strong);
       font-size: 0.98rem;
-      font-weight: 600;
-      color: var(--accent);
+      font-weight: 700;
+      line-height: 1.5;
     }
 
-    .footnote {
-      margin-top: 18px;
-      font-size: 0.9rem;
-      line-height: 1.5;
+    .meter {
+      position: relative;
+      height: 0.5rem;
+      overflow: hidden;
+      border-radius: 999px;
+      background: rgba(127, 127, 127, 0.18);
+    }
+
+    .meter::before {
+      content: "";
+      position: absolute;
+      inset: 0 auto 0 0;
+      width: 42%;
+      border-radius: inherit;
+      background: linear-gradient(90deg, var(--accent), var(--warning));
+      animation: meter 1.5s ease-in-out infinite;
+    }
+
+    .trust-list {
+      display: grid;
+      gap: 0.65rem;
+      margin: 0;
+      padding: 0;
+      list-style: none;
       color: var(--muted);
+      font-size: 0.95rem;
+      line-height: 1.5;
+    }
+
+    .trust-list li {
+      display: grid;
+      grid-template-columns: 1.15rem 1fr;
+      gap: 0.45rem;
+      align-items: start;
+    }
+
+    .trust-list li::before {
+      content: "✓";
+      color: var(--accent-strong);
+      font-weight: 800;
+    }
+
+    .help {
+      border-top: 1px solid var(--border);
+      padding-top: 1rem;
+      color: var(--muted);
+      font-size: 0.95rem;
+      line-height: 1.6;
+    }
+
+    .help-title {
+      margin: 0 0 0.45rem;
+      color: var(--text);
+      font-size: 0.95rem;
+      font-weight: 700;
+      line-height: 1.4;
+    }
+
+    .help p {
+      margin: 0;
+      max-width: 58ch;
+    }
+
+    :focus-visible {
+      outline: none;
+      box-shadow: var(--focus);
     }
 
     @keyframes spin {
@@ -175,52 +260,118 @@
       }
     }
 
-    @media (max-width: 640px) {
-      .card {
-        padding: 28px 22px;
+    @keyframes meter {
+      0% {
+        transform: translateX(-105%);
       }
 
-      .progress {
+      50% {
+        transform: translateX(85%);
+      }
+
+      100% {
+        transform: translateX(245%);
+      }
+    }
+
+    @media (min-width: 42rem) {
+      .content {
+        padding: 2rem;
+      }
+    }
+
+    @media (max-width: 34rem) {
+      body {
+        align-items: start;
+      }
+
+      .content {
+        padding: 1.15rem;
+      }
+
+      .topline {
+        align-items: flex-start;
+        flex-direction: column;
+        gap: 0.4rem;
+      }
+
+      .secure-label {
+        white-space: normal;
+      }
+
+      h1 {
+        font-size: 1.75rem;
+      }
+
+      .status-row {
         grid-template-columns: 1fr;
-        text-align: center;
+      }
+    }
+
+    @media (prefers-reduced-motion: reduce) {
+      *,
+      *::before,
+      *::after {
+        animation-duration: 0.01ms !important;
+        animation-iteration-count: 1 !important;
+        transition-duration: 0.01ms !important;
+        scroll-behavior: auto !important;
       }
 
-      .lead {
-        font-size: 1rem;
+      .meter::before {
+        transform: none;
       }
     }
   </style>
 </head>
 <body>
-  <main class="card">
-    <div class="eyebrow">Sicherheitscheck</div>
-    <h1>Ein kurzer Moment, Ihr Browser wird geprüft.</h1>
-    <p class="lead">
-      Bevor die Seite geladen wird, führt Ihr Gerät eine kleine technische Prüfung aus.
-      Das hilft dabei, automatisierte Zugriffe und Missbrauch zu reduzieren.
-    </p>
-
-    <section class="info" aria-label="Hinweis zur Prüfung">
-      <strong>Was passiert gerade?</strong>
-      <p>
-        Ihr Browser berechnet lokal eine kleine Aufgabe. Dabei werden keine zusätzlichen
-        Eingaben von Ihnen benötigt. Nach erfolgreicher Prüfung werden Sie automatisch
-        weitergeleitet.
-      </p>
-    </section>
-
-    <section class="progress" aria-label="Fortschritt">
-      <div class="spinner" aria-hidden="true"></div>
-      <div class="progress-copy">
-        <strong>Prüfung läuft</strong>
-        <p>Das dauert in der Regel nur kurz.</p>
-        <div class="status" id="status">Prüfung wird vorbereitet...</div>
+  <main class="challenge" aria-labelledby="page-title">
+    <div class="content">
+      <div class="topline">
+        <div class="badge">Sicherheitscheck</div>
+        <div class="secure-label">Automatische Prüfung</div>
       </div>
-    </section>
 
-    <p class="footnote">
-      Falls es länger dauert oder ein Fehler auftritt, laden Sie die Seite bitte neu.
-    </p>
+      <header>
+        <h1 id="page-title">Einen Moment bitte.</h1>
+        <p class="lead">
+          Ihr Browser wird kurz geprüft, bevor die Seite geladen wird. Das schützt
+          vor automatisierten Zugriffen und benötigt keine Eingabe von Ihnen.
+        </p>
+      </header>
+
+      <section class="status-card" aria-labelledby="progress-heading">
+        <div class="status-row">
+          <div class="spinner" aria-hidden="true"></div>
+          <div class="status-copy">
+            <h2 class="status-heading" id="progress-heading">Prüfung läuft</h2>
+            <div
+              class="status"
+              id="status"
+              role="status"
+              aria-live="polite"
+              aria-atomic="true"
+            >
+              Prüfung wird vorbereitet...
+            </div>
+          </div>
+        </div>
+        <div class="meter" aria-hidden="true"></div>
+      </section>
+
+      <ul class="trust-list" aria-label="Hinweise zur Prüfung">
+        <li>Die Berechnung erfolgt lokal im Browser.</li>
+        <li>Nach erfolgreicher Prüfung werden Sie automatisch weitergeleitet.</li>
+      </ul>
+
+      <section class="help" aria-labelledby="help-heading">
+        <h2 class="help-title" id="help-heading">Falls es länger dauert</h2>
+        <p>
+          Laden Sie die Seite neu, wenn die Prüfung nicht abgeschlossen wird oder
+          eine Fehlermeldung erscheint.
+        </p>
+      </section>
+    </div>
   </main>
 
   <script nonce="{{ .CSPNonce }}">
