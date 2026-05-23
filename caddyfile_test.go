@@ -17,23 +17,27 @@ caddy_protector {
 	complexity 18
 	valid_for 120
 	allow_for 1800
-	max_challenge_attempts 10
-	max_pending_challenges 1234
-	block_for 1800
+	secret test-secret
+	cookie_name protector
+	cookie_path /foo
+	cookie_domain example.com
+	cookie_secure false
+	cookie_http_only false
+	cookie_same_site Strict
 	verify_path /__caddy_protector/verify
 	whitelist_ip 66.249.64.0/19
 	whitelist_ip 2001:db8::/32
 	whitelist_file /etc/caddy/goodbots.ips
 	whitelist_url https://example.com/goodbots.ips
-	whitelist_refresh 43200
+	whitelist_refresh 720
 	whitelist_country DE AT NL
 	blacklist_ip 203.0.113.0/24
 	blacklist_file /etc/caddy/badbots.ips
 	blacklist_url https://example.com/badbots.ips
-	blacklist_refresh 3600
+	blacklist_refresh 60
 	blacklist_country RU CN
 	country_url https://example.com/GeoLite2-Country.mmdb
-	country_url_refresh 172800
+	country_url_refresh 2880
 	disable_csp_header
 }
 `
@@ -48,6 +52,27 @@ caddy_protector {
 	}
 	if bb.VerifyPath != "/__caddy_protector/verify" {
 		t.Fatalf("VerifyPath = %q, erwartet %q", bb.VerifyPath, "/__caddy_protector/verify")
+	}
+	if bb.Secret != "test-secret" {
+		t.Fatalf("Secret = %q", bb.Secret)
+	}
+	if bb.CookieName != "protector" {
+		t.Fatalf("CookieName = %q", bb.CookieName)
+	}
+	if bb.CookiePath != "/foo" {
+		t.Fatalf("CookiePath = %q", bb.CookiePath)
+	}
+	if bb.CookieDomain != "example.com" {
+		t.Fatalf("CookieDomain = %q", bb.CookieDomain)
+	}
+	if bb.CookieSecure {
+		t.Fatal("CookieSecure sollte false sein")
+	}
+	if bb.CookieHTTPOnly {
+		t.Fatal("CookieHTTPOnly sollte false sein")
+	}
+	if bb.CookieSameSite != "Strict" {
+		t.Fatalf("CookieSameSite = %q", bb.CookieSameSite)
 	}
 	if len(bb.WhitelistIPs) != 2 {
 		t.Fatalf("WhitelistIPs = %v, erwartet 2 Eintraege", bb.WhitelistIPs)
@@ -86,34 +111,24 @@ caddy_protector {
 		t.Fatalf("CountryRefresh = %v, erwartet 48h", time.Duration(bb.CountryRefresh))
 	}
 	if bb.ValidFor != caddy.Duration(defaultValidFor) {
-		t.Fatalf("ValidFor = %d, erwartet 120s", bb.ValidFor)
+		t.Fatalf("ValidFor = %d, erwartet 120m", bb.ValidFor)
 	}
 	if bb.AllowFor != caddy.Duration(defaultAllowFor) {
-		t.Fatalf("AllowFor = %d, erwartet 1800s", bb.AllowFor)
-	}
-	if bb.MaxChallengeAttempts != 10 {
-		t.Fatalf("MaxChallengeAttempts = %d, erwartet %d", bb.MaxChallengeAttempts, 10)
-	}
-	if bb.MaxPendingChallenges != 1234 {
-		t.Fatalf("MaxPendingChallenges = %d, erwartet %d", bb.MaxPendingChallenges, 1234)
-	}
-	if bb.BlockFor != caddy.Duration(defaultBlockFor) {
-		t.Fatalf("BlockFor = %d, erwartet 1800s", bb.BlockFor)
+		t.Fatalf("AllowFor = %d, erwartet 1800m", bb.AllowFor)
 	}
 	if !bb.DisableCSPHeader {
 		t.Fatal("DisableCSPHeader sollte true sein")
 	}
 }
 
-func TestUnmarshalCaddyfileAcceptsExplicitSecondsSuffix(t *testing.T) {
+func TestUnmarshalCaddyfileAcceptsExplicitMinutesSuffix(t *testing.T) {
 	input := `
 caddy_protector {
-	valid_for 120s
-	allow_for 1800s
-	block_for 1800s
-	whitelist_refresh 3600s
-	blacklist_refresh 7200s
-	country_url_refresh 10800s
+	valid_for 120m
+	allow_for 1800m
+	whitelist_refresh 60m
+	blacklist_refresh 120m
+	country_url_refresh 180m
 }
 `
 
@@ -123,13 +138,10 @@ caddy_protector {
 	}
 
 	if bb.ValidFor != caddy.Duration(defaultValidFor) {
-		t.Fatalf("ValidFor = %d, erwartet 120s", bb.ValidFor)
+		t.Fatalf("ValidFor = %d, erwartet 120m", bb.ValidFor)
 	}
 	if bb.AllowFor != caddy.Duration(defaultAllowFor) {
-		t.Fatalf("AllowFor = %d, erwartet 1800s", bb.AllowFor)
-	}
-	if bb.BlockFor != caddy.Duration(defaultBlockFor) {
-		t.Fatalf("BlockFor = %d, erwartet 1800s", bb.BlockFor)
+		t.Fatalf("AllowFor = %d, erwartet 1800m", bb.AllowFor)
 	}
 	if bb.WhitelistRefresh != caddy.Duration(time.Hour) {
 		t.Fatalf("WhitelistRefresh = %v, erwartet 1h", time.Duration(bb.WhitelistRefresh))
@@ -142,24 +154,24 @@ caddy_protector {
 	}
 }
 
-func TestUnmarshalCaddyfileRejectsMinuteDurations(t *testing.T) {
-	tests := []string{"valid_for", "allow_for", "block_for", "whitelist_refresh", "blacklist_refresh", "country_url_refresh"}
+func TestUnmarshalCaddyfileRejectsSecondDurations(t *testing.T) {
+	tests := []string{"valid_for", "allow_for", "whitelist_refresh", "blacklist_refresh", "country_url_refresh"}
 
 	for _, option := range tests {
 		t.Run(option, func(t *testing.T) {
 			input := `
 caddy_protector {
-	` + option + ` 30m
+	` + option + ` 30s
 }
 `
 
 			var bb CaddyProtector
 			err := bb.UnmarshalCaddyfile(caddyfile.NewTestDispenser(input))
 			if err == nil {
-				t.Fatalf("%s sollte nur Sekunden akzeptieren", option)
+				t.Fatalf("%s sollte nur Minuten akzeptieren", option)
 			}
-			if !strings.Contains(err.Error(), "Sekunden") {
-				t.Fatalf("Fehler = %v, erwartet Hinweis auf Sekunden", err)
+			if !strings.Contains(err.Error(), "Minuten") {
+				t.Fatalf("Fehler = %v, erwartet Hinweis auf Minuten", err)
 			}
 		})
 	}
@@ -167,10 +179,12 @@ caddy_protector {
 
 func TestUnmarshalCaddyfileRejectsLegacyOptions(t *testing.T) {
 	tests := []string{
-		"secret",
 		"seed_cookie_name",
 		"solution_cookie_name",
 		"mac_cookie_name",
+		"max_pending_challenges",
+		"max_challenge_attempts",
+		"block_for",
 	}
 
 	for _, option := range tests {
@@ -187,6 +201,9 @@ caddy_protector {
 				t.Fatalf("die Legacy-Option %s sollte fehlschlagen", option)
 			}
 			want := "unbekannte Option: " + option
+			if option == "max_pending_challenges" || option == "max_challenge_attempts" || option == "block_for" {
+				want = "nicht mehr unterstuetzt"
+			}
 			if !strings.Contains(err.Error(), want) {
 				t.Fatalf("Fehler = %v, erwartet %s", err, want)
 			}
@@ -211,20 +228,20 @@ caddy_protector {
 	}
 }
 
-func TestUnmarshalCaddyfileRejectsBadMaxPendingChallenges(t *testing.T) {
+func TestUnmarshalCaddyfileRejectsRemovedMaxPendingChallenges(t *testing.T) {
 	input := `
 caddy_protector {
-	max_pending_challenges kaputt
+	max_pending_challenges 1
 }
 `
 
 	var bb CaddyProtector
 	err := bb.UnmarshalCaddyfile(caddyfile.NewTestDispenser(input))
 	if err == nil {
-		t.Fatal("erwarteter Fehler fuer ungueltigen max_pending_challenges-Wert fehlt")
+		t.Fatal("erwarteter Fehler fuer entfernte max_pending_challenges-Option fehlt")
 	}
-	if !strings.Contains(err.Error(), "max_pending_challenges-Wert") {
-		t.Fatalf("Fehler = %v, erwartet Hinweis auf max_pending_challenges-Wert", err)
+	if !strings.Contains(err.Error(), "nicht mehr unterstuetzt") {
+		t.Fatalf("Fehler = %v, erwartet Hinweis auf entfernte Option", err)
 	}
 }
 
@@ -330,17 +347,15 @@ func TestCaddyfileAdapterAcceptsMultipleCountryCodesInImportedSnippet(t *testing
 		complexity 15
 		valid_for 15
 		allow_for 20
-		max_challenge_attempts 10
-		max_pending_challenges 100000
-		block_for 1800
+		secret imported-secret
 		verify_path /__caddy_protector/verify
 		whitelist_country AT BE BG CY CZ DE DK EE ES FI FR GR HR IE IT LT LU LV MT NL GB US
 		whitelist_url https://raw.githubusercontent.com/AnTheMaker/GoodBots/main/all.ips
-		whitelist_refresh 862400
+		whitelist_refresh 1440
 		blacklist_url https://raw.githubusercontent.com/fabriziosalmi/caddy-waf/refs/heads/main/ip_blacklist.txt
-		blacklist_refresh 862400
+		blacklist_refresh 1440
 		country_url https://git.io/GeoLite2-Country.mmdb
-		country_url_refresh 172800
+		country_url_refresh 2880
 	}
 }
 

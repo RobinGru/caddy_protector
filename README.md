@@ -2,12 +2,12 @@
 
 `caddy_protector` ist ein HTTP-Middleware-Modul für Caddy. Es schützt Upstreams mit einer browserseitigen Proof-of-Work-Challenge und gibt Clients erst nach erfolgreicher Verifikation für eine konfigurierbare Zeit frei.
 
-Die aktuelle Implementierung arbeitet ohne Cookies:
+Die aktuelle Implementierung ist stateless:
 
-- kein Setzen oder Lesen von Cookies
-- kein HMAC-Flow
+- signiertes Freigabe-Cookie statt serverseitiger Freigabeliste
+- BLAKE3 keyed MAC für Challenge-Token und Cookie
 - kein Client-Secret im Browser
-- serverseitige Freigabe auf Basis von `Client-IP + User-Agent`
+- keine Bindung der Freigabe an `Client-IP + User-Agent`
 
 Wichtig: Das Modul ist eine Hürde gegen Bots, Scraper und einfachen Abuse, aber kein Ersatz für Authentifizierung, Autorisierung, Rate Limiting oder eine WAF.
 
@@ -15,24 +15,22 @@ Wichtig: Das Modul ist eine Hürde gegen Bots, Scraper und einfachen Abuse, aber
 
 Der Ablauf pro Request ist:
 
-1. Die Middleware ermittelt den Client-Schlüssel aus IP-Adresse und `User-Agent`.
-2. `POST`-Requests auf `verify_path` werden immer intern verarbeitet und nie an den Upstream weitergereicht.
-3. Blacklist-Einträge werden sofort verworfen; die Verbindung wird ohne reguläre HTTP-Antwort beendet.
-4. Allowlist-Einträge passieren die Middleware direkt.
-5. Wenn `complexity` für den Request auf `0` aufgelöst wird, ist die Challenge deaktiviert.
-6. Bereits freigegebene Clients dürfen bis zum Ablauf von `allow_for` passieren.
-7. Andere Clients erhalten eine Challenge-Seite mit Seed und Browser-Bundle.
-8. Der Browser sucht einen `nonce`, für den `BLAKE3(seed || nonce)` genügend führende Null-Bits hat.
-9. Die Lösung wird als JSON an `verify_path` gesendet.
-10. Bei Erfolg wird die Pending-Challenge entfernt und der Client für `allow_for` Sekunden freigegeben.
+1. `POST`-Requests auf `verify_path` werden immer intern verarbeitet und nie an den Upstream weitergereicht.
+2. Blacklist-Einträge werden sofort verworfen; die Verbindung wird ohne reguläre HTTP-Antwort beendet.
+3. Allowlist-Einträge passieren die Middleware direkt.
+4. Wenn `complexity` für den Request auf `0` aufgelöst wird, ist die Challenge deaktiviert.
+5. Requests mit gültigem Freigabe-Cookie dürfen bis zum Ablauf von `allow_for` passieren.
+6. Andere Clients erhalten eine Challenge-Seite mit signiertem Challenge-Token und Browser-Bundle.
+7. Der Browser extrahiert den Seed aus dem Challenge-Token und sucht einen `nonce`, für den `BLAKE3(seed || nonce)` genügend führende Null-Bits hat.
+8. Die Lösung wird als JSON mit `challengeToken` und `nonce` an `verify_path` gesendet.
+9. Der Server validiert zuerst den Token-MAC und die Token-Gültigkeit, dann die PoW-Lösung.
+10. Bei Erfolg setzt der Server ein signiertes `HttpOnly`-Cookie für `allow_for` Minuten.
 
 ## Features
 
-- serverseitig verwaltete Pending-Challenges
-- serverseitige Freigabeliste mit Ablaufzeit
+- stateless signierte Challenge-Token
+- stateless signierte Freigabe-Cookies
 - konfigurierbare Schwierigkeit über statischen Wert oder Caddy-Placeholder
-- temporäre Sperre bei zu vielen Challenge-Abrufen
-- globale Obergrenze für offene Challenges
 - Allowlist und Blacklist per Inline-IP, Datei oder URL
 - Country-Filter per GeoIP-MMDB mit Whitelist- und Blacklist-Regeln
 - periodischer Refresh von Datei- und URL-Quellen
@@ -55,38 +53,45 @@ Alternativ kann das Modul in einen bestehenden eigenen Caddy-Build eingebunden w
 
 | Direktive | Beschreibung | Standard |
 | --- | --- | --- |
-| `complexity` | Anzahl führender Null-Bits in `BLAKE3(seed \|\| nonce)`. Unterstützt auch Placeholders wie `{vars.caddy_protector_complexity}`. `0` deaktiviert die Challenge für den Request. | `16` |
-| `valid_for` | Gültigkeitsdauer einer offenen Challenge in Sekunden. | `120` |
-| `allow_for` | Freigabedauer für erfolgreich verifizierte Clients in Sekunden. | `1800` |
-| `max_challenge_attempts` | Anzahl Challenge-Seitenabrufe innerhalb von `block_for`, bevor ein Client mit `429` blockiert wird. | `10` |
-| `block_for` | Sperrdauer nach zu vielen Challenge-Abrufen in Sekunden. | `1800` |
-| `max_pending_challenges` | Globale Obergrenze für serverseitig gespeicherte offene Challenges. | `100000` |
+| `complexity` | Anzahl führender Null-Bits in `BLAKE3(seed \|\| nonce)`. Unterstützt auch Placeholders wie `{vars.caddy_protector_complexity}`. `0` deaktiviert die Challenge für den Request. | `18` |
+| `valid_for` | Gültigkeitsdauer einer offenen Challenge in Minuten. | `120` |
+| `allow_for` | Freigabedauer für erfolgreich verifizierte Clients in Minuten. | `1800` |
+| `secret` | Geheimnis für die Ableitung der BLAKE3-MAC-Schlüssel. Alternative zu `secret_file`. | - |
+| `secret_file` | Datei mit dem Geheimnis für die Ableitung der BLAKE3-MAC-Schlüssel. Alternative zu `secret`. | - |
+| `cookie_name` | Name des Freigabe-Cookies. | `caddy_protector` |
+| `cookie_path` | Path-Attribut des Freigabe-Cookies. | `/` |
+| `cookie_domain` | Optionales Domain-Attribut des Freigabe-Cookies. | - |
+| `cookie_secure` | Setzt das `Secure`-Flag des Freigabe-Cookies. | `true` |
+| `cookie_http_only` | Setzt das `HttpOnly`-Flag des Freigabe-Cookies. | `true` |
+| `cookie_same_site` | `Lax`, `Strict` oder `None` für das Freigabe-Cookie. | `Lax` |
 | `verify_path` | Interner `POST`-Endpunkt für die Verifikation. | `/__caddy_protector/verify` |
 | `whitelist_ip` | Fügt eine einzelne IP oder ein CIDR-Präfix zur Allowlist hinzu. Kann mehrfach angegeben werden. | - |
 | `whitelist_file` | Lädt zusätzliche Allowlist-Einträge aus einer Datei. | - |
 | `whitelist_url` | Lädt zusätzliche Allowlist-Einträge von einer URL. | - |
-| `whitelist_refresh` | Aktualisiert Datei- und URL-Quellen der Allowlist periodisch in Sekunden. | deaktiviert |
+| `whitelist_refresh` | Aktualisiert Datei- und URL-Quellen der Allowlist periodisch in Minuten. | deaktiviert |
 | `whitelist_country` | Erlaubt nur Requests aus den angegebenen ISO-3166-1-Alpha-2-Ländern, in die bestehende Schutzlogik weiterzulaufen. Mehrere Codes pro Direktive sind erlaubt. | - |
 | `blacklist_ip` | Fügt eine einzelne IP oder ein CIDR-Präfix zur Blacklist hinzu. Kann mehrfach angegeben werden. | - |
 | `blacklist_file` | Lädt zusätzliche Blacklist-Einträge aus einer Datei. | - |
 | `blacklist_url` | Lädt zusätzliche Blacklist-Einträge von einer URL. | - |
-| `blacklist_refresh` | Aktualisiert Datei- und URL-Quellen der Blacklist periodisch in Sekunden. | deaktiviert |
+| `blacklist_refresh` | Aktualisiert Datei- und URL-Quellen der Blacklist periodisch in Minuten. | deaktiviert |
 | `blacklist_country` | Sperrt Requests aus den angegebenen ISO-3166-1-Alpha-2-Ländern sofort. Mehrere Codes pro Direktive sind erlaubt. | - |
 | `country_url` | Lädt eine MaxMind-MMDB für Country-Lookups. | - |
-| `country_url_refresh` | Aktualisiert die MMDB periodisch in Sekunden. | deaktiviert |
+| `country_url_refresh` | Aktualisiert die MMDB periodisch in Minuten. | deaktiviert |
 | `csp_script_src` | Fügt eine Quelle zur `script-src`-CSP-Direktive hinzu, z.B. für Cloudflare Rocket Loader. CSP-Keywords wie `'strict-dynamic'` werden ebenfalls unterstützt. Kann mehrfach angegeben werden. | - |
 | `template` | Pfad zu einem eigenen HTML-Template. | eingebautes Template |
 | `disable_csp_header` | Deaktiviert den von der Middleware gesetzten CSP-Header. | deaktiviert |
 
 ### Wichtige Regeln
 
-- Zeitwerte werden als positive ganze Sekunden angegeben, zum Beispiel `120` oder `120s`.
+- Zeitwerte werden als positive ganze Minuten angegeben, zum Beispiel `120` oder `120m`.
 - `verify_path` muss mit `/` beginnen.
 - `complexity` darf zwischen `0` und `256` liegen.
+- Genau eines von `secret` oder `secret_file` muss gesetzt sein.
+- `cookie_path` muss mit `/` beginnen.
+- `cookie_same_site` muss `Lax`, `Strict` oder `None` sein.
 - `whitelist_country` und `blacklist_country` erwarten ISO-3166-1-Alpha-2-Codes wie `DE` oder `RU`.
 - Wenn Country-Regeln verwendet werden, muss `country_url` gesetzt sein.
-- `max_challenge_attempts` und `max_pending_challenges` müssen mindestens `1` sein.
-- Alte Cookie-bezogene Optionen wie `secret`, `seed_cookie_name`, `solution_cookie_name` und `mac_cookie_name` werden nicht unterstützt.
+- `max_pending_challenges`, `max_challenge_attempts`, `block_for`, `seed_cookie_name`, `solution_cookie_name` und `mac_cookie_name` werden nicht unterstützt.
 
 ### Allowlist und Blacklist
 
@@ -126,24 +131,26 @@ example.com {
     complexity {vars.caddy_protector_complexity}
     valid_for 120
     allow_for 1800
-    max_challenge_attempts 10
-    max_pending_challenges 100000
-    block_for 1800
+    secret please-change-me
+    cookie_name caddy_protector
+    cookie_secure true
+    cookie_http_only true
+    cookie_same_site Lax
     verify_path /__caddy_protector/verify
 
     whitelist_ip 66.249.64.0/19
     whitelist_file /etc/caddy/goodbots.ips
     whitelist_url https://raw.githubusercontent.com/AnTheMaker/GoodBots/main/all.ips
-    whitelist_refresh 43200
+    whitelist_refresh 720
     whitelist_country DE AT NL
 
     blacklist_ip 203.0.113.0/24
     blacklist_url https://raw.githubusercontent.com/fabriziosalmi/caddy-waf/refs/heads/main/ip_blacklist.txt
-    blacklist_refresh 3600
+    blacklist_refresh 60
     blacklist_country RU CN
 
     country_url https://git.io/GeoLite2-Country.mmdb
-    country_url_refresh 172800
+    country_url_refresh 2880
   }
 
   reverse_proxy 127.0.0.1:8081
@@ -189,7 +196,6 @@ script-src 'nonce-<nonce>' https://abc.de 'strict-dynamic'
 
 Wenn ein eigenes Template verwendet wird, sollte es diese Daten verarbeiten:
 
-- `.Seed`
 - `.Complexity`
 - `.VerifyPath`
 - `.ChallengeJS`
@@ -200,11 +206,13 @@ Wenn ein eigenes Template verwendet wird, sollte es diese Daten verarbeiten:
 
 `csp_script_src` akzeptiert rohe CSP-Source-Tokens ohne Leerzeichen, Semikolon oder Zeilenumbruch, zum Beispiel `https://example.com` oder `'strict-dynamic'`. Unsichere oder syntaktisch kaputte Tokens werden beim Laden der Konfiguration abgelehnt.
 
-## Identität, Cookies und Proxies
+## Cookies und Proxies
 
-CaddyProtector setzt bewusst keine Cookies. Eine erfolgreiche Challenge wird serverseitig für die Kombination aus erkannter Client-IP und User-Agent freigegeben. Das vermeidet Tracking- oder Consent-Fragen durch eigene Cookies, hat aber einen Trade-off: Teilen sich mehrere Nutzer dieselbe aus Caddy-Sicht sichtbare IP und denselben User-Agent, kann eine gelöste Challenge innerhalb von `allow_for` auch für diese Kombination wirken. Umgekehrt müssen Nutzer nach einem IP-Wechsel erneut eine Challenge lösen.
+CaddyProtector setzt ein eigenes signiertes Freigabe-Cookie. Das Cookie enthält nur Zeitinformationen und ist nicht an IP oder User-Agent gebunden. Dadurch bleiben Freigaben bei IP-Wechseln stabiler, aber ein gestohlenes Cookie ist bis zum Ablauf wiederverwendbar. `cookie_secure true` sollte deshalb nur über HTTPS betrieben werden und praktisch immer aktiv bleiben.
 
-Bei Betrieb hinter Reverse Proxies, Load Balancern oder CDNs ist deshalb besonders wichtig, dass Caddy die echte Client-IP nur aus vertrauenswürdigen Proxy-Headern übernimmt. Konfigurieren Sie die Proxy-Kette in Caddy korrekt, damit `client_ip`, Allowlist, Blacklist, Country-Regeln und Challenge-Freigaben nicht auf der IP des vorgeschalteten Proxys basieren.
+Das Challenge-Token und das Freigabe-Cookie werden serverseitig mit BLAKE3 keyed MAC geschützt. Der Browser kennt das Geheimnis nicht.
+
+Bei Betrieb hinter Reverse Proxies, Load Balancern oder CDNs ist weiterhin wichtig, dass Caddy die echte Client-IP nur aus vertrauenswürdigen Proxy-Headern übernimmt. Das beeinflusst Allowlist, Blacklist und Country-Regeln.
 
 ## Browser-Bundle
 

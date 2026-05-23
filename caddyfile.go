@@ -71,35 +71,41 @@ func (bb *CaddyProtector) UnmarshalCaddyfile(d *caddyfile.Dispenser) error {
 			case "complexity":
 				bb.Complexity = arg
 			case "valid_for":
-				duration, err := parseSecondsDuration(arg)
+				duration, err := parseMinutesDuration(arg)
 				if err != nil {
 					return d.Errf("ungueltige valid_for-Dauer: %v", err)
 				}
 				bb.ValidFor = caddy.Duration(duration)
 			case "allow_for":
-				duration, err := parseSecondsDuration(arg)
+				duration, err := parseMinutesDuration(arg)
 				if err != nil {
 					return d.Errf("ungueltige allow_for-Dauer: %v", err)
 				}
 				bb.AllowFor = caddy.Duration(duration)
-			case "max_challenge_attempts":
-				attempts, err := strconv.Atoi(arg)
+			case "secret":
+				bb.Secret = arg
+			case "secret_file":
+				bb.SecretFile = arg
+			case "cookie_name":
+				bb.CookieName = arg
+			case "cookie_path":
+				bb.CookiePath = arg
+			case "cookie_domain":
+				bb.CookieDomain = arg
+			case "cookie_secure":
+				value, err := strconv.ParseBool(arg)
 				if err != nil {
-					return d.Errf("ungueltiger max_challenge_attempts-Wert: %v", err)
+					return d.Errf("ungueltiger cookie_secure-Wert: %v", err)
 				}
-				bb.MaxChallengeAttempts = attempts
-			case "max_pending_challenges":
-				maxPendingChallenges, err := strconv.Atoi(arg)
+				bb.CookieSecure = value
+			case "cookie_http_only":
+				value, err := strconv.ParseBool(arg)
 				if err != nil {
-					return d.Errf("ungueltiger max_pending_challenges-Wert: %v", err)
+					return d.Errf("ungueltiger cookie_http_only-Wert: %v", err)
 				}
-				bb.MaxPendingChallenges = maxPendingChallenges
-			case "block_for":
-				duration, err := parseSecondsDuration(arg)
-				if err != nil {
-					return d.Errf("ungueltige block_for-Dauer: %v", err)
-				}
-				bb.BlockFor = caddy.Duration(duration)
+				bb.CookieHTTPOnly = value
+			case "cookie_same_site":
+				bb.CookieSameSite = arg
 			case "verify_path":
 				bb.VerifyPath = arg
 			case "whitelist_ip":
@@ -109,7 +115,7 @@ func (bb *CaddyProtector) UnmarshalCaddyfile(d *caddyfile.Dispenser) error {
 			case "whitelist_url":
 				bb.WhitelistURL = arg
 			case "whitelist_refresh":
-				duration, err := parseSecondsDuration(arg)
+				duration, err := parseMinutesDuration(arg)
 				if err != nil {
 					return d.Errf("ungueltige whitelist_refresh-Dauer: %v", err)
 				}
@@ -121,7 +127,7 @@ func (bb *CaddyProtector) UnmarshalCaddyfile(d *caddyfile.Dispenser) error {
 			case "blacklist_url":
 				bb.BlacklistURL = arg
 			case "blacklist_refresh":
-				duration, err := parseSecondsDuration(arg)
+				duration, err := parseMinutesDuration(arg)
 				if err != nil {
 					return d.Errf("ungueltige blacklist_refresh-Dauer: %v", err)
 				}
@@ -129,13 +135,19 @@ func (bb *CaddyProtector) UnmarshalCaddyfile(d *caddyfile.Dispenser) error {
 			case "country_url":
 				bb.CountryURL = arg
 			case "country_url_refresh":
-				duration, err := parseSecondsDuration(arg)
+				duration, err := parseMinutesDuration(arg)
 				if err != nil {
 					return d.Errf("ungueltige country_url_refresh-Dauer: %v", err)
 				}
 				bb.CountryRefresh = caddy.Duration(duration)
 			case "template":
 				bb.TemplatePath = arg
+			case "max_challenge_attempts":
+				return d.Errf("max_challenge_attempts wird in der stateless Variante nicht mehr unterstuetzt")
+			case "block_for":
+				return d.Errf("block_for wird in der stateless Variante nicht mehr unterstuetzt")
+			case "max_pending_challenges":
+				return d.Errf("max_pending_challenges wird in der stateless Variante nicht mehr unterstuetzt")
 			default:
 				return d.Errf("unbekannte Option: %s", param)
 			}
@@ -144,23 +156,23 @@ func (bb *CaddyProtector) UnmarshalCaddyfile(d *caddyfile.Dispenser) error {
 	return nil
 }
 
-func parseSecondsDuration(raw string) (time.Duration, error) {
+func parseMinutesDuration(raw string) (time.Duration, error) {
 	if raw == "" {
-		return 0, fmt.Errorf("Dauer muss in Sekunden angegeben werden")
+		return 0, fmt.Errorf("Dauer muss in Minuten angegeben werden")
 	}
 
-	secondsText := strings.TrimSuffix(raw, "s")
-	if secondsText == "" || strings.ContainsAny(secondsText, ".+-") {
-		return 0, fmt.Errorf("Dauer muss als positive ganze Sekunden angegeben werden, z.B. 120 oder 120s")
+	minutesText := strings.TrimSuffix(raw, "m")
+	if minutesText == "" || strings.ContainsAny(minutesText, ".+-") {
+		return 0, fmt.Errorf("Dauer muss als positive ganze Minuten angegeben werden, z.B. 120 oder 120m")
 	}
 
-	seconds, err := strconv.Atoi(secondsText)
+	minutes, err := strconv.Atoi(minutesText)
 	if err != nil {
-		return 0, fmt.Errorf("Dauer muss als positive ganze Sekunden angegeben werden, z.B. 120 oder 120s")
+		return 0, fmt.Errorf("Dauer muss als positive ganze Minuten angegeben werden, z.B. 120 oder 120m")
 	}
-	if seconds <= 0 {
-		return 0, fmt.Errorf("Dauer muss groesser als 0 Sekunden sein")
+	if minutes <= 0 {
+		return 0, fmt.Errorf("Dauer muss groesser als 0 Minuten sein")
 	}
 
-	return time.Duration(seconds) * time.Second, nil
+	return time.Duration(minutes) * time.Minute, nil
 }
