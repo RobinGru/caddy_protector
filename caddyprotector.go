@@ -155,10 +155,10 @@ type CaddyProtector struct {
 	CookieDomain string `json:"cookie_domain,omitempty"`
 
 	// CookieSecure steuert das Secure-Flag des Freigabe-Cookies.
-	CookieSecure bool `json:"cookie_secure,omitempty"`
+	CookieSecure *bool `json:"cookie_secure,omitempty"`
 
 	// CookieHTTPOnly steuert das HttpOnly-Flag des Freigabe-Cookies.
-	CookieHTTPOnly bool `json:"cookie_http_only,omitempty"`
+	CookieHTTPOnly *bool `json:"cookie_http_only,omitempty"`
 
 	// CookieSameSite steuert das SameSite-Attribut des Freigabe-Cookies.
 	CookieSameSite string `json:"cookie_same_site,omitempty"`
@@ -250,11 +250,11 @@ func (bb *CaddyProtector) Provision(ctx caddy.Context) error {
 	if bb.CookiePath == "" {
 		bb.CookiePath = "/"
 	}
-	if !bb.CookieSecure {
-		bb.CookieSecure = true
+	if bb.CookieSecure == nil {
+		bb.CookieSecure = boolPtr(true)
 	}
-	if !bb.CookieHTTPOnly {
-		bb.CookieHTTPOnly = true
+	if bb.CookieHTTPOnly == nil {
+		bb.CookieHTTPOnly = boolPtr(true)
 	}
 	if bb.CookieSameSite == "" {
 		bb.CookieSameSite = "Lax"
@@ -316,8 +316,8 @@ func (bb *CaddyProtector) Provision(ctx caddy.Context) error {
 		zap.String("cookie_name", bb.CookieName),
 		zap.String("cookie_path", bb.CookiePath),
 		zap.String("cookie_domain", bb.CookieDomain),
-		zap.Bool("cookie_secure", bb.CookieSecure),
-		zap.Bool("cookie_http_only", bb.CookieHTTPOnly),
+		zap.Bool("cookie_secure", bb.cookieSecureValue()),
+		zap.Bool("cookie_http_only", bb.cookieHTTPOnlyValue()),
 		zap.String("cookie_same_site", bb.CookieSameSite),
 		zap.Strings("whitelist_ips", bb.WhitelistIPs),
 		zap.String("whitelist_file", bb.WhitelistFile),
@@ -409,7 +409,6 @@ func (bb *CaddyProtector) ServeHTTP(w http.ResponseWriter, r *http.Request, next
 		zap.String("requested_url", redactURLForLog(r.URL)),
 	)
 
-	complexity := bb.resolveComplexity(r, logger)
 	if r.URL.Path == bb.VerifyPath {
 		if r.Method != http.MethodPost {
 			logger.Warn("Verify-Endpunkt wurde mit nicht erlaubter Methode aufgerufen", zap.String("allowed_method", http.MethodPost))
@@ -417,14 +416,10 @@ func (bb *CaddyProtector) ServeHTTP(w http.ResponseWriter, r *http.Request, next
 			http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
 			return nil
 		}
-		if complexity == 0 {
-			logger.Warn("Verify-Endpunkt wurde trotz deaktivierter Challenge aufgerufen")
-			http.Error(w, "challenge deaktiviert", http.StatusNotFound)
-			return nil
-		}
-		return bb.handleVerify(w, r, complexity)
+		return bb.handleVerify(w, r)
 	}
 
+	complexity := bb.resolveComplexity(r, logger)
 	clientAddr, clientAddrErr := netip.ParseAddr(clientIP)
 	countryCode, countryFound := "", false
 	if bb.hasCountryRules {
@@ -804,13 +799,25 @@ func (bb *CaddyProtector) writeAllowCookie(w http.ResponseWriter, now time.Time)
 		Value:    value,
 		Path:     bb.CookiePath,
 		Domain:   bb.CookieDomain,
-		HttpOnly: bb.CookieHTTPOnly,
-		Secure:   bb.CookieSecure,
+		HttpOnly: bb.cookieHTTPOnlyValue(),
+		Secure:   bb.cookieSecureValue(),
 		SameSite: sameSite,
 		Expires:  now.Add(time.Duration(bb.AllowFor)),
 		MaxAge:   int(time.Duration(bb.AllowFor).Seconds()),
 	})
 	return nil
+}
+
+func boolPtr(v bool) *bool {
+	return &v
+}
+
+func (bb *CaddyProtector) cookieSecureValue() bool {
+	return bb.CookieSecure != nil && *bb.CookieSecure
+}
+
+func (bb *CaddyProtector) cookieHTTPOnlyValue() bool {
+	return bb.CookieHTTPOnly != nil && *bb.CookieHTTPOnly
 }
 
 func (bb *CaddyProtector) hasValidAllowCookie(r *http.Request) bool {
@@ -1329,7 +1336,7 @@ func (bb *CaddyProtector) logIPListLoaded(mode, kind string, ipList *ipAllowlist
 	)
 }
 
-func (bb *CaddyProtector) handleVerify(w http.ResponseWriter, r *http.Request, complexity int) error {
+func (bb *CaddyProtector) handleVerify(w http.ResponseWriter, r *http.Request) error {
 	clientIP := getClientIP(r.Context(), r.RemoteAddr)
 	logger := bb.logger.With(
 		zap.String("event", "caddy_protector_verify"),
@@ -1341,7 +1348,6 @@ func (bb *CaddyProtector) handleVerify(w http.ResponseWriter, r *http.Request, c
 		zap.String("origin", r.Header.Get("Origin")),
 		zap.String("referer", redactHeaderURLForLog(r.Header.Get("Referer"))),
 		zap.Int64("content_length", r.ContentLength),
-		zap.Int("complexity", complexity),
 	)
 
 	if !isJSONContentType(r.Header.Get("Content-Type")) {
@@ -1361,7 +1367,7 @@ func (bb *CaddyProtector) handleVerify(w http.ResponseWriter, r *http.Request, c
 		logger.Warn("CaddyProtector-Verify fehlgeschlagen: Request-Body ist kein gültiges JSON",
 			zap.Int("body_length", decodeInfo.BodyLength),
 			zap.String("json_error", decodeInfo.OriginalDecodeError),
-			zap.String("hint", `Der Browser muss echtes JSON wie {"seed":"...","nonce":"..."} mit Content-Type application/json senden.`),
+			zap.String("hint", `Der Browser muss echtes JSON wie {"challengeToken":"...","nonce":"..."} mit Content-Type application/json senden.`),
 			zap.Error(err),
 		)
 		http.Error(w, "ungültige Anfrage", http.StatusBadRequest)
@@ -1393,14 +1399,7 @@ func (bb *CaddyProtector) handleVerify(w http.ResponseWriter, r *http.Request, c
 		http.Error(w, "challenge abgelaufen", http.StatusForbidden)
 		return nil
 	}
-	if claims.Complexity != complexity {
-		logger.Warn("CaddyProtector-Verify fehlgeschlagen: Challenge-Token passt nicht zur aktuellen Complexity",
-			zap.Int("token_complexity", claims.Complexity),
-			zap.Int("required_complexity", complexity),
-		)
-		http.Error(w, "challenge abgelaufen", http.StatusForbidden)
-		return nil
-	}
+	logger = logger.With(zap.Int("complexity", claims.Complexity))
 	seedBytes, err := hex.DecodeString(claims.Seed)
 	if err != nil || len(seedBytes) != challengeSeedLength {
 		logger.Warn("CaddyProtector-Verify fehlgeschlagen: Seed im Challenge-Token ist ungültig",
@@ -1418,10 +1417,10 @@ func (bb *CaddyProtector) handleVerify(w http.ResponseWriter, r *http.Request, c
 
 	sum := blake3.Sum256(input)
 	leadingZeroBits := countLeadingZeroBits(sum[:])
-	if leadingZeroBits < complexity {
+	if leadingZeroBits < claims.Complexity {
 		logger.Warn("CaddyProtector-Verify fehlgeschlagen: Proof-of-Work-Lösung erfüllt die Complexity nicht",
 			zap.Int("leading_zero_bits", leadingZeroBits),
-			zap.Int("required_zero_bits", complexity),
+			zap.Int("required_zero_bits", claims.Complexity),
 			zap.String("hash_prefix", hex.EncodeToString(sum[:4])),
 			zap.String("return_path", redactPathForLog(claims.ReturnPath)),
 		)

@@ -97,13 +97,13 @@ func (bb *CaddyProtector) UnmarshalCaddyfile(d *caddyfile.Dispenser) error {
 				if err != nil {
 					return d.Errf("ungueltiger cookie_secure-Wert: %v", err)
 				}
-				bb.CookieSecure = value
+				bb.CookieSecure = &value
 			case "cookie_http_only":
 				value, err := strconv.ParseBool(arg)
 				if err != nil {
 					return d.Errf("ungueltiger cookie_http_only-Wert: %v", err)
 				}
-				bb.CookieHTTPOnly = value
+				bb.CookieHTTPOnly = &value
 			case "cookie_same_site":
 				bb.CookieSameSite = arg
 			case "verify_path":

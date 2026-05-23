@@ -6,6 +6,7 @@ import (
 	"context"
 	"encoding/hex"
 	"encoding/json"
+	"errors"
 	"io"
 	"net"
 	"net/http"
@@ -122,12 +123,63 @@ func TestValidateRejectsBadWhitelistURL(t *testing.T) {
 	}
 }
 
+func TestValidateRejectsBadBlacklistURL(t *testing.T) {
+	bb := newTestProtector(t)
+	bb.BlacklistURL = "://bad-url"
+
+	err := bb.Validate()
+	if err == nil || !strings.Contains(err.Error(), "blacklist_url") {
+		t.Fatalf("Validate() error = %v", err)
+	}
+}
+
 func TestValidateRejectsMissingCountryURLWhenCountriesConfigured(t *testing.T) {
 	bb := newTestProtector(t)
 	bb.WhitelistCountries = []string{"DE"}
 
 	err := bb.Validate()
 	if err == nil || !strings.Contains(err.Error(), "country_url") {
+		t.Fatalf("Validate() error = %v", err)
+	}
+}
+
+func TestValidateRejectsBadCountryCode(t *testing.T) {
+	bb := newTestProtector(t)
+	bb.WhitelistCountries = []string{"D3"}
+	bb.CountryURL = "https://example.com/GeoLite2-Country.mmdb"
+
+	err := bb.Validate()
+	if err == nil || !strings.Contains(err.Error(), "whitelist_country") {
+		t.Fatalf("Validate() error = %v", err)
+	}
+}
+
+func TestValidateRejectsBadCSPScriptSrc(t *testing.T) {
+	tests := []string{
+		" https://example.com",
+		"https://example.com; default-src 'none'",
+		"https://example.com\nhttps://evil.example",
+		"",
+	}
+
+	for _, source := range tests {
+		t.Run(source, func(t *testing.T) {
+			bb := newTestProtector(t)
+			bb.CSPScriptSrc = []string{source}
+
+			err := bb.Validate()
+			if err == nil || !strings.Contains(err.Error(), "csp_script_src") {
+				t.Fatalf("Validate() error = %v", err)
+			}
+		})
+	}
+}
+
+func TestValidateAcceptsSafeCSPScriptSrc(t *testing.T) {
+	bb := newTestProtector(t)
+	bb.CSPScriptSrc = []string{"https://example.com", "'strict-dynamic'"}
+
+	if err := bb.Validate(); err != nil {
 		t.Fatalf("Validate() error = %v", err)
 	}
 }
@@ -219,6 +271,28 @@ func TestAllowCookieRejectsExpiredClaims(t *testing.T) {
 	}
 }
 
+func TestWriteAllowCookieHonorsExplicitFalseFlags(t *testing.T) {
+	bb := newTestProtector(t)
+	bb.CookieSecure = boolPtr(false)
+	bb.CookieHTTPOnly = boolPtr(false)
+
+	rr := httptest.NewRecorder()
+	if err := bb.writeAllowCookie(rr, time.Now()); err != nil {
+		t.Fatalf("writeAllowCookie() error = %v", err)
+	}
+
+	cookies := rr.Result().Cookies()
+	if len(cookies) != 1 {
+		t.Fatalf("cookies = %d, erwartet 1", len(cookies))
+	}
+	if cookies[0].Secure {
+		t.Fatal("Cookie sollte Secure=false respektieren")
+	}
+	if cookies[0].HttpOnly {
+		t.Fatal("Cookie sollte HttpOnly=false respektieren")
+	}
+}
+
 func TestHandleVerifyRejectsWrongContentType(t *testing.T) {
 	bb := newTestProtector(t)
 	token, claims := newChallengeTokenFor(t, bb, "/protected", 8, time.Now())
@@ -227,7 +301,7 @@ func TestHandleVerifyRejectsWrongContentType(t *testing.T) {
 	req.Header.Set("Content-Type", "text/plain")
 	rr := httptest.NewRecorder()
 
-	if err := bb.handleVerify(rr, req, 8); err != nil {
+	if err := bb.handleVerify(rr, req); err != nil {
 		t.Fatalf("handleVerify() error = %v", err)
 	}
 	if rr.Code != http.StatusUnsupportedMediaType {
@@ -240,7 +314,7 @@ func TestVerifyRejectsBadChallengeToken(t *testing.T) {
 	rr := httptest.NewRecorder()
 	req := verifyRequestFor(t, "kaputt", "abcd")
 
-	if err := bb.handleVerify(rr, req, 8); err != nil {
+	if err := bb.handleVerify(rr, req); err != nil {
 		t.Fatalf("handleVerify() error = %v", err)
 	}
 	if rr.Code != http.StatusForbidden {
@@ -254,7 +328,7 @@ func TestVerifyRejectsWrongNonce(t *testing.T) {
 	rr := httptest.NewRecorder()
 	req := verifyRequestFor(t, token, "00")
 
-	if err := bb.handleVerify(rr, req, 8); err != nil {
+	if err := bb.handleVerify(rr, req); err != nil {
 		t.Fatalf("handleVerify() error = %v", err)
 	}
 	if rr.Code != http.StatusForbidden {
@@ -269,7 +343,7 @@ func TestVerifyAcceptsCorrectNonce(t *testing.T) {
 	rr := httptest.NewRecorder()
 	req := verifyRequestFor(t, token, findNonceHex(t, seedBytes, 8))
 
-	if err := bb.handleVerify(rr, req, 8); err != nil {
+	if err := bb.handleVerify(rr, req); err != nil {
 		t.Fatalf("handleVerify() error = %v", err)
 	}
 	if rr.Code != http.StatusOK {
@@ -285,6 +359,25 @@ func TestVerifyAcceptsCorrectNonce(t *testing.T) {
 	}
 	if got := res["returnTo"]; got != "/protected?x=1" {
 		t.Fatalf("returnTo = %v", got)
+	}
+}
+
+func TestVerifyAcceptsTokenComplexityIndependentFromVerifyRequestComplexity(t *testing.T) {
+	bb := newTestProtector(t)
+	token, claims := newChallengeTokenFor(t, bb, "/protected", 8, time.Now())
+	seedBytes, _ := hex.DecodeString(claims.Seed)
+	req := verifyRequestFor(t, token, findNonceHex(t, seedBytes, 8))
+
+	repl := caddy.NewReplacer()
+	repl.Set("vars.caddy_protector_complexity", "0")
+	req = req.WithContext(context.WithValue(req.Context(), caddy.ReplacerCtxKey, repl))
+
+	rr := httptest.NewRecorder()
+	if err := bb.handleVerify(rr, req); err != nil {
+		t.Fatalf("handleVerify() error = %v", err)
+	}
+	if rr.Code != http.StatusOK {
+		t.Fatalf("Status = %d, erwartet %d", rr.Code, http.StatusOK)
 	}
 }
 
@@ -346,6 +439,132 @@ func TestLoadAllowlistMergesInlineFileAndURL(t *testing.T) {
 	}
 	if allowlist.entries != 3 {
 		t.Fatalf("entries = %d", allowlist.entries)
+	}
+}
+
+func TestParseAllowlistEntryAcceptsCommentsAndCIDR(t *testing.T) {
+	entry, err := parseAllowlistEntry("inline", 1, "2001:db8::/32 # good bot")
+	if err != nil {
+		t.Fatalf("parseAllowlistEntry() error = %v", err)
+	}
+	if entry == nil || entry.prefix.String() != "2001:db8::/32" {
+		t.Fatalf("Entry = %#v, erwartet Prefix 2001:db8::/32", entry)
+	}
+
+	entry, err = parseAllowlistEntry("inline", 2, "# nur Kommentar")
+	if err != nil {
+		t.Fatalf("parseAllowlistEntry() error = %v", err)
+	}
+	if entry != nil {
+		t.Fatalf("Kommentar sollte ignoriert werden, erhalten: %#v", entry)
+	}
+}
+
+func TestLoadAllowlistRejectsInvalidInlineEntry(t *testing.T) {
+	bb := newTestProtector(t)
+	bb.WhitelistIPs = []string{"kaputt"}
+
+	_, err := bb.loadAllowlist(context.Background())
+	if err == nil || !strings.Contains(err.Error(), "Allowlist-Eintrag") {
+		t.Fatalf("loadAllowlist() error = %v", err)
+	}
+}
+
+func TestLoadBlacklistMergesInlineFileAndURL(t *testing.T) {
+	tmpFile, err := os.CreateTemp(t.TempDir(), "badbots-*.ips")
+	if err != nil {
+		t.Fatalf("CreateTemp() error = %v", err)
+	}
+	defer tmpFile.Close()
+	if _, err := tmpFile.WriteString("203.0.113.0/24\n"); err != nil {
+		t.Fatalf("WriteString() error = %v", err)
+	}
+
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		_, _ = w.Write([]byte("2001:db8:bad::/48\n"))
+	}))
+	defer server.Close()
+
+	bb := newTestProtector(t)
+	bb.BlacklistIPs = []string{"198.51.100.7", "198.51.100.7 # duplicate"}
+	bb.BlacklistFile = tmpFile.Name()
+	bb.BlacklistURL = server.URL
+
+	blacklist, err := bb.loadBlacklist(context.Background())
+	if err != nil {
+		t.Fatalf("loadBlacklist() error = %v", err)
+	}
+	if _, ok := blacklist.exactIPs[netip.MustParseAddr("198.51.100.7")]; !ok {
+		t.Fatal("Inline-IP fehlt in der Blacklist")
+	}
+	if blacklist.entries != 3 {
+		t.Fatalf("entries = %d", blacklist.entries)
+	}
+}
+
+func TestLoadBlacklistRejectsMissingFile(t *testing.T) {
+	bb := newTestProtector(t)
+	bb.BlacklistFile = t.TempDir() + "\\missing.ips"
+
+	_, err := bb.loadBlacklist(context.Background())
+	if err == nil || !strings.Contains(err.Error(), "blacklist_file") {
+		t.Fatalf("loadBlacklist() error = %v", err)
+	}
+}
+
+func TestAllowlistRefreshKeepsPreviousSnapshotOnFailure(t *testing.T) {
+	tmpFile, err := os.CreateTemp(t.TempDir(), "goodbots-*.ips")
+	if err != nil {
+		t.Fatalf("CreateTemp() error = %v", err)
+	}
+	defer tmpFile.Close()
+	if _, err := tmpFile.WriteString("192.0.2.1\n"); err != nil {
+		t.Fatalf("WriteString() error = %v", err)
+	}
+
+	bb := newTestProtector(t)
+	bb.WhitelistFile = tmpFile.Name()
+	allowlist, err := bb.loadAllowlist(context.Background())
+	if err != nil {
+		t.Fatalf("loadAllowlist() error = %v", err)
+	}
+	bb.allowlist.Store(allowlist)
+
+	if err := os.WriteFile(tmpFile.Name(), []byte("kaputt\n"), 0o600); err != nil {
+		t.Fatalf("WriteFile() error = %v", err)
+	}
+	if _, err := bb.loadAllowlist(context.Background()); err == nil {
+		t.Fatal("erwarteter Refresh-Fehler fehlt")
+	}
+	if !bb.isAllowlisted(netip.MustParseAddr("192.0.2.1")) {
+		t.Fatal("vorherige Allowlist sollte aktiv bleiben")
+	}
+}
+
+func TestFetchURLBytesLimitedRejectsOversizedBody(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		_, _ = w.Write([]byte("abcdef"))
+	}))
+	defer server.Close()
+
+	bb := newTestProtector(t)
+	_, err := bb.fetchURLBytesLimited(context.Background(), "whitelist", server.URL, 5)
+	if err == nil || !strings.Contains(err.Error(), "zu gross") {
+		t.Fatalf("fetchURLBytesLimited() error = %v", err)
+	}
+}
+
+func TestFetchURLBytesLimitedRejectsOversizedContentLength(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Length", "6")
+		_, _ = w.Write([]byte("abc"))
+	}))
+	defer server.Close()
+
+	bb := newTestProtector(t)
+	_, err := bb.fetchURLBytesLimited(context.Background(), "country", server.URL, 5)
+	if err == nil || !strings.Contains(err.Error(), "zu gross") {
+		t.Fatalf("fetchURLBytesLimited() error = %v", err)
 	}
 }
 
@@ -434,6 +653,30 @@ func TestServeHTTPAllowsAllowlistedIPv4Client(t *testing.T) {
 	}
 }
 
+func TestServeHTTPAllowsAllowlistedIPv6Prefix(t *testing.T) {
+	bb := newTestProtector(t)
+	bb.allowlist.Store(&ipAllowlist{
+		exactIPs: make(map[netip.Addr]struct{}),
+		prefixes: []netip.Prefix{netip.MustParsePrefix("2001:db8::/32")},
+	})
+
+	req := newChallengeRequest(http.MethodGet, "http://example.com/protected", "2001:db8::1234", "UA")
+	rr := httptest.NewRecorder()
+	called := false
+
+	err := bb.ServeHTTP(rr, req, caddyhttp.HandlerFunc(func(w http.ResponseWriter, r *http.Request) error {
+		called = true
+		w.WriteHeader(http.StatusNoContent)
+		return nil
+	}))
+	if err != nil {
+		t.Fatalf("ServeHTTP() error = %v", err)
+	}
+	if !called {
+		t.Fatal("IPv6-Prefix-Allowlist sollte Request durchlassen")
+	}
+}
+
 func TestServeHTTPBlocksBlacklistedIPv4Client(t *testing.T) {
 	bb := newTestProtector(t)
 	bb.blacklist.Store(&ipAllowlist{exactIPs: map[netip.Addr]struct{}{
@@ -454,6 +697,150 @@ func TestServeHTTPBlocksBlacklistedIPv4Client(t *testing.T) {
 	if called {
 		t.Fatal("Blacklist sollte Request blockieren")
 	}
+	if !rr.conn.closed {
+		t.Fatal("Blacklist sollte die Verbindung schliessen")
+	}
+}
+
+func TestServeHTTPBlacklistBeatsAllowlist(t *testing.T) {
+	bb := newTestProtector(t)
+	addr := netip.MustParseAddr("192.0.2.1")
+	bb.allowlist.Store(&ipAllowlist{exactIPs: map[netip.Addr]struct{}{addr: {}}})
+	bb.blacklist.Store(&ipAllowlist{exactIPs: map[netip.Addr]struct{}{addr: {}}})
+
+	req := newChallengeRequest(http.MethodGet, "http://example.com/protected", "192.0.2.1", "UA")
+	rr := newHijackableResponseWriter()
+	called := false
+
+	err := bb.ServeHTTP(rr, req, caddyhttp.HandlerFunc(func(w http.ResponseWriter, r *http.Request) error {
+		called = true
+		return nil
+	}))
+	if err != nil {
+		t.Fatalf("ServeHTTP() error = %v", err)
+	}
+	if called {
+		t.Fatal("Blacklist muss vor Allowlist greifen")
+	}
+	if !rr.conn.closed {
+		t.Fatal("Blacklist muss die Verbindung vor der Allowlist schliessen")
+	}
+}
+
+func TestServeHTTPBlacklistedClientFallsBackToAbortHandlerWithoutHijacker(t *testing.T) {
+	bb := newTestProtector(t)
+	bb.blacklist.Store(&ipAllowlist{
+		exactIPs: map[netip.Addr]struct{}{netip.MustParseAddr("192.0.2.1"): {}},
+	})
+
+	req := newChallengeRequest(http.MethodGet, "http://example.com/protected", "192.0.2.1", "UA")
+	rr := httptest.NewRecorder()
+	called := false
+
+	defer func() {
+		recovered := recover()
+		if !errors.Is(recovered.(error), http.ErrAbortHandler) {
+			t.Fatalf("recover() = %v, erwartet http.ErrAbortHandler", recovered)
+		}
+		if called {
+			t.Fatal("blacklisted Traffic darf im Abort-Fallback nicht weitergereicht werden")
+		}
+	}()
+
+	_ = bb.ServeHTTP(rr, req, caddyhttp.HandlerFunc(func(w http.ResponseWriter, r *http.Request) error {
+		called = true
+		return nil
+	}))
+	t.Fatal("erwarteter Abort fuer nicht hijackbaren ResponseWriter blieb aus")
+}
+
+func TestServeHTTPCountryBlacklistBlocksBeforeIPAllowlist(t *testing.T) {
+	bb := newTestProtector(t)
+	addr := netip.MustParseAddr("192.0.2.1")
+	bb.BlacklistCountries = []string{"RU"}
+	bb.CountryURL = "https://example.com/GeoLite2-Country.mmdb"
+	if err := bb.Validate(); err != nil {
+		t.Fatalf("Validate() error = %v", err)
+	}
+	bb.testCountryLookup = func(got netip.Addr) (string, bool) {
+		if got != addr {
+			t.Fatalf("lookup addr = %v, erwartet %v", got, addr)
+		}
+		return "RU", true
+	}
+	bb.allowlist.Store(&ipAllowlist{exactIPs: map[netip.Addr]struct{}{addr: {}}})
+
+	req := newChallengeRequest(http.MethodGet, "http://example.com/protected", "192.0.2.1", "UA")
+	rr := newHijackableResponseWriter()
+	called := false
+
+	err := bb.ServeHTTP(rr, req, caddyhttp.HandlerFunc(func(w http.ResponseWriter, r *http.Request) error {
+		called = true
+		return nil
+	}))
+	if err != nil {
+		t.Fatalf("ServeHTTP() error = %v", err)
+	}
+	if called {
+		t.Fatal("Country-Blacklist darf nicht von der IP-Allowlist uebersteuert werden")
+	}
+	if !rr.conn.closed {
+		t.Fatal("Country-Blacklist sollte die Verbindung schliessen")
+	}
+}
+
+func TestServeHTTPCountryWhitelistStillServesChallenge(t *testing.T) {
+	bb := newTestProtector(t)
+	bb.WhitelistCountries = []string{"DE"}
+	bb.CountryURL = "https://example.com/GeoLite2-Country.mmdb"
+	if err := bb.Validate(); err != nil {
+		t.Fatalf("Validate() error = %v", err)
+	}
+	bb.testCountryLookup = func(netip.Addr) (string, bool) {
+		return "DE", true
+	}
+
+	req := newChallengeRequest(http.MethodGet, "http://example.com/protected", "192.0.2.1", "UA")
+	rr := httptest.NewRecorder()
+	err := bb.ServeHTTP(rr, req, caddyhttp.HandlerFunc(func(w http.ResponseWriter, r *http.Request) error {
+		t.Fatal("Country-Whitelist darf nicht direkt freigeben")
+		return nil
+	}))
+	if err != nil {
+		t.Fatalf("ServeHTTP() error = %v", err)
+	}
+	if rr.Code != http.StatusOK || rr.Header().Get("X-Bot-Barrier") != "challenge" {
+		t.Fatalf("Status=%d X-Bot-Barrier=%q", rr.Code, rr.Header().Get("X-Bot-Barrier"))
+	}
+}
+
+func TestServeHTTPCountryWhitelistAllowsFurtherIPAllowlist(t *testing.T) {
+	bb := newTestProtector(t)
+	addr := netip.MustParseAddr("192.0.2.1")
+	bb.WhitelistCountries = []string{"DE"}
+	bb.CountryURL = "https://example.com/GeoLite2-Country.mmdb"
+	if err := bb.Validate(); err != nil {
+		t.Fatalf("Validate() error = %v", err)
+	}
+	bb.testCountryLookup = func(netip.Addr) (string, bool) {
+		return "DE", true
+	}
+	bb.allowlist.Store(&ipAllowlist{exactIPs: map[netip.Addr]struct{}{addr: {}}})
+
+	req := newChallengeRequest(http.MethodGet, "http://example.com/protected", "192.0.2.1", "UA")
+	rr := httptest.NewRecorder()
+	called := false
+	err := bb.ServeHTTP(rr, req, caddyhttp.HandlerFunc(func(w http.ResponseWriter, r *http.Request) error {
+		called = true
+		w.WriteHeader(http.StatusNoContent)
+		return nil
+	}))
+	if err != nil {
+		t.Fatalf("ServeHTTP() error = %v", err)
+	}
+	if !called {
+		t.Fatal("IP-Allowlist sollte nach erfolgreichem Country-Gate weiter greifen")
+	}
 }
 
 func TestServeHTTPRejectsNonPostVerifyPathBeforeAllowlist(t *testing.T) {
@@ -473,10 +860,12 @@ func TestServeHTTPRejectsNonPostVerifyPathBeforeAllowlist(t *testing.T) {
 	}
 }
 
-func TestServeHTTPVerifyPathIsInterceptedWhenComplexityIsZero(t *testing.T) {
+func TestServeHTTPVerifyPathAllowsValidTokenWhenComplexityIsZero(t *testing.T) {
 	bb := newTestProtector(t)
 	bb.Complexity = "0"
-	req := verifyRequestFor(t, "abc.def", "abcd")
+	token, claims := newChallengeTokenFor(t, bb, "/protected", 8, time.Now())
+	seedBytes, _ := hex.DecodeString(claims.Seed)
+	req := verifyRequestFor(t, token, findNonceHex(t, seedBytes, 8))
 	req = req.WithContext(context.WithValue(req.Context(), caddyhttp.VarsCtxKey, map[string]any{"client_ip": "192.0.2.1"}))
 	rr := httptest.NewRecorder()
 
@@ -487,7 +876,7 @@ func TestServeHTTPVerifyPathIsInterceptedWhenComplexityIsZero(t *testing.T) {
 	if err != nil {
 		t.Fatalf("ServeHTTP() error = %v", err)
 	}
-	if rr.Code != http.StatusNotFound {
+	if rr.Code != http.StatusOK {
 		t.Fatalf("Status = %d", rr.Code)
 	}
 }
@@ -514,8 +903,8 @@ func newTestProtector(t *testing.T) *CaddyProtector {
 		VerifyPath:     defaultVerifyPath,
 		CookieName:     defaultCookieName,
 		CookiePath:     "/",
-		CookieSecure:   true,
-		CookieHTTPOnly: true,
+		CookieSecure:   boolPtr(true),
+		CookieHTTPOnly: boolPtr(true),
 		CookieSameSite: "Lax",
 		Secret:         "test-secret",
 		logger:         zaptest.NewLogger(t),
