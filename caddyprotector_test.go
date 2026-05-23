@@ -159,36 +159,6 @@ func TestValidateRejectsBadCountryCode(t *testing.T) {
 	}
 }
 
-func TestValidateRejectsBadCSPScriptSrc(t *testing.T) {
-	tests := []string{
-		" https://example.com",
-		"https://example.com; default-src 'none'",
-		"https://example.com\nhttps://evil.example",
-		"",
-	}
-
-	for _, source := range tests {
-		t.Run(source, func(t *testing.T) {
-			bb := newTestProtector(t)
-			bb.CSPScriptSrc = []string{source}
-
-			err := bb.Validate()
-			if err == nil || !strings.Contains(err.Error(), "csp_script_src") {
-				t.Fatalf("Validate() error = %v", err)
-			}
-		})
-	}
-}
-
-func TestValidateAcceptsSafeCSPScriptSrc(t *testing.T) {
-	bb := newTestProtector(t)
-	bb.CSPScriptSrc = []string{"https://example.com", "'strict-dynamic'"}
-
-	if err := bb.Validate(); err != nil {
-		t.Fatalf("Validate() error = %v", err)
-	}
-}
-
 func TestValidateRejectsEmptyDenyPathPrefix(t *testing.T) {
 	bb := newTestProtector(t)
 	bb.DenyPathPrefixes = []string{"   "}

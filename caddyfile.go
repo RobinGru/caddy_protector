@@ -53,15 +53,6 @@ func (bb *CaddyProtector) UnmarshalCaddyfile(d *caddyfile.Dispenser) error {
 				continue
 			}
 
-			if param == "csp_script_src" {
-				args := d.RemainingArgs()
-				if len(args) == 0 {
-					return d.ArgErr()
-				}
-				bb.CSPScriptSrc = append(bb.CSPScriptSrc, args...)
-				continue
-			}
-
 			if param == "deny_header_substring" {
 				args := d.RemainingArgs()
 				if len(args) != 2 {

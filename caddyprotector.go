@@ -272,9 +272,6 @@ type CaddyProtector struct {
 	// TemplatePath ist der Pfad zu einem benutzerdefinierten HTML-Template.
 	TemplatePath string `json:"template,omitempty"`
 
-	// CSPScriptSrc definiert zusaetzliche Quellen, die in der script-src CSP-Direktive erlaubt werden.
-	CSPScriptSrc []string `json:"csp_script_src,omitempty"`
-
 	// DisableCSPHeader deaktiviert den von CaddyProtector gesetzten CSP-Header.
 	DisableCSPHeader bool `json:"disable_csp_header,omitempty"`
 
@@ -536,9 +533,6 @@ func (bb *CaddyProtector) Validate() error {
 		return err
 	}
 	if err := validateCountryConfig(bb.WhitelistCountries, bb.BlacklistCountries, bb.CountryURL, bb.CountryRefresh); err != nil {
-		return err
-	}
-	if err := validateCSPScriptSrc(bb.CSPScriptSrc); err != nil {
 		return err
 	}
 	if bb.Complexity == "" {
@@ -917,11 +911,7 @@ func (bb *CaddyProtector) serveChallenge(w http.ResponseWriter, r *http.Request,
 			http.Error(w, "Challenge-Seite konnte nicht gerendert werden", http.StatusInternalServerError)
 			return nil
 		}
-		scriptSrc := fmt.Sprintf("'nonce-%s'", cspNonce)
-		for _, src := range bb.CSPScriptSrc {
-			scriptSrc += " " + src
-		}
-		w.Header().Set("Content-Security-Policy", fmt.Sprintf("default-src 'none'; script-src %s; style-src 'nonce-%s'; connect-src 'self'; img-src 'self'; base-uri 'none'; form-action 'self'; object-src 'none';", scriptSrc, cspNonce))
+		w.Header().Set("Content-Security-Policy", fmt.Sprintf("default-src 'none'; script-src 'nonce-%s'; style-src 'nonce-%s'; connect-src 'self'; img-src 'self'; base-uri 'none'; form-action 'self'; object-src 'none';", cspNonce, cspNonce))
 		data["CSPNonce"] = template.HTMLAttr(cspNonce)
 	}
 
@@ -1215,22 +1205,6 @@ func validateIPListConfig(kind string, inline []string, _ string, rawURL string,
 	for i, entry := range inline {
 		if _, err := parseAllowlistEntry(kind+":inline", i+1, entry); err != nil {
 			return err
-		}
-	}
-	return nil
-}
-
-func validateCSPScriptSrc(sources []string) error {
-	for _, source := range sources {
-		trimmed := strings.TrimSpace(source)
-		if trimmed == "" {
-			return fmt.Errorf("csp_script_src enthaelt eine leere Quelle")
-		}
-		if trimmed != source {
-			return fmt.Errorf("csp_script_src-Quelle darf keine fuehrenden oder folgenden Leerzeichen enthalten: %q", source)
-		}
-		if strings.ContainsAny(source, "\r\n;\x00") || strings.ContainsAny(source, " \t") {
-			return fmt.Errorf("csp_script_src-Quelle enthaelt ungueltige Zeichen: %q", source)
 		}
 	}
 	return nil
