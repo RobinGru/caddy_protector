@@ -4,7 +4,9 @@ import (
 	"bufio"
 	"bytes"
 	"context"
+	"crypto/subtle"
 	"crypto/rand"
+	"encoding/base64"
 	"encoding/hex"
 	"encoding/json"
 	"fmt"
@@ -40,39 +42,25 @@ var defaultHTML string
 var embeddedBundle string
 
 const (
-	defaultComplexity           = "16"
+	defaultComplexity           = "18"
 	defaultVerifyPath           = "/__caddy_protector/verify"
-	defaultValidFor             = 120 * time.Second
-	defaultAllowFor             = 1800 * time.Second
-	defaultMaxChallengeAttempts = 10
-	defaultMaxPendingChallenges = 100000
-	defaultBlockFor             = 1800 * time.Second
+	defaultValidFor             = 120 * time.Minute
+	defaultAllowFor             = 1800 * time.Minute
+	defaultCookieName           = "caddy_protector"
 	maxVerifyBodyBytes          = 4096
-	maxVerifyAttempts           = 3
 	challengeSeedLength         = 32
 	maxNonceLength              = 64
 	blake3HashBits              = 256
 	maxIPListBytes              = 10 << 20
 	maxCountryDBBytes           = 100 << 20
+	tokenVersion                = 1
+	challengeTokenContext       = "caddy_protector:challenge_token:v1"
+	cookieMACContext            = "caddy_protector:cookie_mac:v1"
 )
 
-type pendingChallenge struct {
-	Key        string
-	Seed       []byte
-	ExpiresAt  time.Time
-	Attempts   int
-	ReturnPath string
-}
-
-type challengeAttemptCounter struct {
-	Count        int
-	FirstSeen    time.Time
-	BlockedUntil time.Time
-}
-
 type verifyRequest struct {
-	Seed  string `json:"seed"`
-	Nonce string `json:"nonce"`
+	ChallengeToken string `json:"challengeToken"`
+	Nonce          string `json:"nonce"`
 }
 
 type verifyDecodeInfo struct {
@@ -112,6 +100,20 @@ type geoIPCountryRecord struct {
 	} `maxminddb:"country"`
 }
 
+type challengeTokenClaims struct {
+	Version    int    `json:"v"`
+	Seed       string `json:"seed"`
+	ExpiresAt  int64  `json:"exp"`
+	ReturnPath string `json:"return_to"`
+	Complexity int    `json:"complexity"`
+}
+
+type allowCookieClaims struct {
+	Version   int   `json:"v"`
+	IssuedAt  int64 `json:"iat"`
+	ExpiresAt int64 `json:"exp"`
+}
+
 // CaddyProtector ist ein Caddy-Middleware-Modul, das vor dem Zugriff auf HTTP-Ressourcen
 // das Lösen einer Rechen-Challenge verlangt.
 type CaddyProtector struct {
@@ -137,17 +139,29 @@ type CaddyProtector struct {
 	// VerifyPath ist der interne POST-Endpunkt für die Verifikation.
 	VerifyPath string `json:"verify_path,omitempty"`
 
-	// MaxChallengeAttempts bestimmt, wie viele Challenge-Seiten ein Client
-	// abrufen darf, bevor er temporär blockiert wird.
-	MaxChallengeAttempts int `json:"max_challenge_attempts,omitempty"`
+	// Secret ist das Rohmaterial fuer die Ableitung der BLAKE3-Keyed-MAC-Schluessel.
+	Secret string `json:"secret,omitempty"`
 
-	// MaxPendingChallenges begrenzt die Anzahl serverseitig gespeicherter,
-	// noch nicht gelöster Challenges.
-	MaxPendingChallenges int `json:"max_pending_challenges,omitempty"`
+	// SecretFile verweist auf eine Datei mit dem Geheimnis fuer die Token-/Cookie-Signatur.
+	SecretFile string `json:"secret_file,omitempty"`
 
-	// BlockFor bestimmt, wie lange ein Client nach zu vielen Challenge-Abrufen
-	// blockiert bleibt.
-	BlockFor caddy.Duration `json:"block_for,omitempty"`
+	// CookieName ist der Name des Freigabe-Cookies.
+	CookieName string `json:"cookie_name,omitempty"`
+
+	// CookiePath ist der Pfad des Freigabe-Cookies.
+	CookiePath string `json:"cookie_path,omitempty"`
+
+	// CookieDomain ist optional die Domain des Freigabe-Cookies.
+	CookieDomain string `json:"cookie_domain,omitempty"`
+
+	// CookieSecure steuert das Secure-Flag des Freigabe-Cookies.
+	CookieSecure bool `json:"cookie_secure,omitempty"`
+
+	// CookieHTTPOnly steuert das HttpOnly-Flag des Freigabe-Cookies.
+	CookieHTTPOnly bool `json:"cookie_http_only,omitempty"`
+
+	// CookieSameSite steuert das SameSite-Attribut des Freigabe-Cookies.
+	CookieSameSite string `json:"cookie_same_site,omitempty"`
 
 	// WhitelistIPs sind IPs oder CIDR-Praefixe, die ohne Challenge weitergelassen werden.
 	WhitelistIPs []string `json:"whitelist_ip,omitempty"`
@@ -185,10 +199,6 @@ type CaddyProtector struct {
 	// CountryRefresh bestimmt das Refresh-Intervall fuer die Country-MMDB.
 	CountryRefresh caddy.Duration `json:"country_url_refresh,omitempty"`
 
-	mu                  sync.Mutex
-	pending             map[string]pendingChallenge
-	allowed             map[string]time.Time
-	challengeAttempts   map[string]challengeAttemptCounter
 	challengeTemplate   *template.Template
 	logger              *zap.Logger
 	allowlist           atomic.Value
@@ -201,14 +211,14 @@ type CaddyProtector struct {
 	blacklistDone       chan struct{}
 	countryStop         chan struct{}
 	countryDone         chan struct{}
-	cleanupStop         chan struct{}
-	cleanupDone         chan struct{}
 	whitelistCountrySet map[string]struct{}
 	blacklistCountrySet map[string]struct{}
 	hasCountryRules     bool
 	hasCountryWhitelist bool
 	testCountryLookup   func(netip.Addr) (string, bool)
 	testCountryLoader   func(context.Context, string) (*countryDB, error)
+	challengeMACKey     []byte
+	cookieMACKey        []byte
 }
 
 func (*CaddyProtector) CaddyModule() caddy.ModuleInfo {
@@ -234,23 +244,20 @@ func (bb *CaddyProtector) Provision(ctx caddy.Context) error {
 	if bb.VerifyPath == "" {
 		bb.VerifyPath = defaultVerifyPath
 	}
-	if bb.MaxChallengeAttempts == 0 {
-		bb.MaxChallengeAttempts = defaultMaxChallengeAttempts
+	if bb.CookieName == "" {
+		bb.CookieName = defaultCookieName
 	}
-	if bb.MaxPendingChallenges == 0 {
-		bb.MaxPendingChallenges = defaultMaxPendingChallenges
+	if bb.CookiePath == "" {
+		bb.CookiePath = "/"
 	}
-	if bb.BlockFor == 0 {
-		bb.BlockFor = caddy.Duration(defaultBlockFor)
+	if !bb.CookieSecure {
+		bb.CookieSecure = true
 	}
-	if bb.pending == nil {
-		bb.pending = make(map[string]pendingChallenge)
+	if !bb.CookieHTTPOnly {
+		bb.CookieHTTPOnly = true
 	}
-	if bb.allowed == nil {
-		bb.allowed = make(map[string]time.Time)
-	}
-	if bb.challengeAttempts == nil {
-		bb.challengeAttempts = make(map[string]challengeAttemptCounter)
+	if bb.CookieSameSite == "" {
+		bb.CookieSameSite = "Lax"
 	}
 	if err := bb.Validate(); err != nil {
 		return err
@@ -301,19 +308,17 @@ func (bb *CaddyProtector) Provision(ctx caddy.Context) error {
 		go bb.runCountryRefreshLoop(time.Duration(bb.CountryRefresh), bb.countryStop, bb.countryDone)
 	}
 
-	// Periodischer Cleanup abgelaufener Einträge im Hintergrund
-	bb.cleanupStop = make(chan struct{})
-	bb.cleanupDone = make(chan struct{})
-	go bb.runCleanupLoop(bb.cleanupInterval(), bb.cleanupStop, bb.cleanupDone)
-
 	bb.logger.Info("CaddyProtector-Modul erfolgreich initialisiert",
 		zap.String("complexity", bb.Complexity),
 		zap.Duration("valid_for", time.Duration(bb.ValidFor)),
 		zap.Duration("allow_for", time.Duration(bb.AllowFor)),
 		zap.String("verify_path", bb.VerifyPath),
-		zap.Int("max_challenge_attempts", bb.MaxChallengeAttempts),
-		zap.Int("max_pending_challenges", bb.MaxPendingChallenges),
-		zap.Duration("block_for", time.Duration(bb.BlockFor)),
+		zap.String("cookie_name", bb.CookieName),
+		zap.String("cookie_path", bb.CookiePath),
+		zap.String("cookie_domain", bb.CookieDomain),
+		zap.Bool("cookie_secure", bb.CookieSecure),
+		zap.Bool("cookie_http_only", bb.CookieHTTPOnly),
+		zap.String("cookie_same_site", bb.CookieSameSite),
 		zap.Strings("whitelist_ips", bb.WhitelistIPs),
 		zap.String("whitelist_file", bb.WhitelistFile),
 		zap.String("whitelist_url", bb.WhitelistURL),
@@ -373,17 +378,23 @@ func (bb *CaddyProtector) Validate() error {
 	if time.Duration(bb.AllowFor) <= 0 {
 		return fmt.Errorf("allow_for muss größer als 0 sein")
 	}
+	secretMaterial, err := bb.loadSecretMaterial()
+	if err != nil {
+		return err
+	}
+	bb.challengeMACKey = deriveMACKey(challengeTokenContext, secretMaterial)
+	bb.cookieMACKey = deriveMACKey(cookieMACContext, secretMaterial)
 	if bb.VerifyPath == "" || bb.VerifyPath[0] != '/' {
 		return fmt.Errorf("verify_path muss mit '/' beginnen")
 	}
-	if bb.MaxChallengeAttempts < 1 {
-		return fmt.Errorf("max_challenge_attempts muss mindestens 1 sein")
+	if bb.CookieName == "" {
+		return fmt.Errorf("cookie_name darf nicht leer sein")
 	}
-	if bb.MaxPendingChallenges < 1 {
-		return fmt.Errorf("max_pending_challenges muss mindestens 1 sein")
+	if bb.CookiePath == "" || bb.CookiePath[0] != '/' {
+		return fmt.Errorf("cookie_path muss mit '/' beginnen")
 	}
-	if time.Duration(bb.BlockFor) <= 0 {
-		return fmt.Errorf("block_for muss größer als 0 sein")
+	if _, err := parseSameSiteMode(bb.CookieSameSite); err != nil {
+		return err
 	}
 	return nil
 }
@@ -391,7 +402,6 @@ func (bb *CaddyProtector) Validate() error {
 // ServeHTTP prüft den Challenge-Status oder liefert eine Challenge-Seite aus.
 func (bb *CaddyProtector) ServeHTTP(w http.ResponseWriter, r *http.Request, next caddyhttp.Handler) error {
 	clientIP := getClientIP(r.Context(), r.RemoteAddr)
-	key := clientKey(clientIP, r.UserAgent())
 
 	logger := bb.logger.With(
 		zap.String("client_ip", clientIP),
@@ -412,7 +422,7 @@ func (bb *CaddyProtector) ServeHTTP(w http.ResponseWriter, r *http.Request, next
 			http.Error(w, "challenge deaktiviert", http.StatusNotFound)
 			return nil
 		}
-		return bb.handleVerify(w, r, key, complexity)
+		return bb.handleVerify(w, r, complexity)
 	}
 
 	clientAddr, clientAddrErr := netip.ParseAddr(clientIP)
@@ -449,22 +459,13 @@ func (bb *CaddyProtector) ServeHTTP(w http.ResponseWriter, r *http.Request, next
 		return next.ServeHTTP(w, r)
 	}
 
-	if bb.isAllowed(key) {
-		logger.Debug("Client ist bereits freigegeben")
+	if bb.hasValidAllowCookie(r) {
+		logger.Debug("Client hat ein gültiges Freigabe-Cookie")
 		return next.ServeHTTP(w, r)
 	}
 
-	if blocked, retryAfter := bb.registerChallengeAttempt(key); blocked {
-		logger.Warn("Client wird wegen zu vieler Challenge-Abrufe temporär blockiert",
-			zap.Int("max_challenge_attempts", bb.MaxChallengeAttempts),
-			zap.Duration("retry_after", retryAfter),
-		)
-		writeBlockedResponse(w, retryAfter)
-		return nil
-	}
-
 	logger.Info("Challenge-Seite wird ausgeliefert")
-	return bb.serveChallenge(w, r, key, complexity)
+	return bb.serveChallenge(w, r, complexity)
 }
 
 func parseComplexityValue(value string) (int, error) {
@@ -573,25 +574,31 @@ func redactPathForLog(raw string) string {
 	return redactURLForLog(u)
 }
 
-func (bb *CaddyProtector) serveChallenge(w http.ResponseWriter, r *http.Request, key string, complexity int) error {
-	seedHex, err := bb.createPendingChallenge(key, bb.getOriginalPath(r))
-	if err != nil {
+func (bb *CaddyProtector) serveChallenge(w http.ResponseWriter, r *http.Request, complexity int) error {
+	seed := make([]byte, challengeSeedLength)
+	if _, err := rand.Read(seed); err != nil {
 		bb.logger.Error("Challenge konnte nicht erstellt werden", zap.Error(err))
 		http.Error(w, "Seed-Erzeugung fehlgeschlagen", http.StatusInternalServerError)
 		return nil
 	}
+	seedHex := hex.EncodeToString(seed)
+	challengeToken, err := bb.createChallengeToken(seedHex, bb.getOriginalPath(r), complexity, time.Now())
+	if err != nil {
+		bb.logger.Error("Challenge-Token konnte nicht erstellt werden", zap.Error(err))
+		http.Error(w, "Challenge-Seite konnte nicht gerendert werden", http.StatusInternalServerError)
+		return nil
+	}
 
 	data := map[string]any{
-		"Seed":        seedHex,
 		"Complexity":  complexity,
 		"VerifyPath":  bb.VerifyPath,
 		"ChallengeJS": template.JS(embeddedBundle),
 	}
 
 	configJSON, err := json.Marshal(map[string]any{
-		"seed":       seedHex,
-		"complexity": complexity,
-		"verifyPath": bb.VerifyPath,
+		"challengeToken": challengeToken,
+		"complexity":     complexity,
+		"verifyPath":     bb.VerifyPath,
 	})
 	if err != nil {
 		bb.logger.Error("Challenge-Konfiguration konnte nicht serialisiert werden", zap.Error(err))
@@ -661,74 +668,6 @@ func generateCSPNonce() (string, error) {
 	return hex.EncodeToString(nonceBytes), nil
 }
 
-func clientKey(ip, userAgent string) string {
-	return ip + "\x00" + userAgent
-}
-
-func (bb *CaddyProtector) isAllowed(key string) bool {
-	now := time.Now()
-
-	bb.mu.Lock()
-	defer bb.mu.Unlock()
-
-	exp, ok := bb.allowed[key]
-	if !ok {
-		return false
-	}
-	if now.After(exp) {
-		delete(bb.allowed, key)
-		return false
-	}
-	return true
-}
-
-func (bb *CaddyProtector) markAllowed(key string) {
-	bb.mu.Lock()
-	defer bb.mu.Unlock()
-
-	bb.allowed[key] = time.Now().Add(time.Duration(bb.AllowFor))
-	delete(bb.challengeAttempts, key)
-}
-
-func (bb *CaddyProtector) registerChallengeAttempt(key string) (bool, time.Duration) {
-	now := time.Now()
-	blockFor := time.Duration(bb.BlockFor)
-
-	bb.mu.Lock()
-	defer bb.mu.Unlock()
-
-	counter := bb.challengeAttempts[key]
-	if !counter.BlockedUntil.IsZero() {
-		if now.Before(counter.BlockedUntil) {
-			return true, counter.BlockedUntil.Sub(now)
-		}
-		counter = challengeAttemptCounter{}
-	}
-	if counter.FirstSeen.IsZero() || now.Sub(counter.FirstSeen) > blockFor {
-		counter = challengeAttemptCounter{FirstSeen: now}
-	}
-
-	counter.Count++
-	if counter.Count > bb.MaxChallengeAttempts {
-		counter.BlockedUntil = now.Add(blockFor)
-		bb.challengeAttempts[key] = counter
-		return true, blockFor
-	}
-
-	bb.challengeAttempts[key] = counter
-	return false, 0
-}
-
-func writeBlockedResponse(w http.ResponseWriter, retryAfter time.Duration) {
-	retryAfterSeconds := int(retryAfter.Round(time.Second).Seconds())
-	if retryAfterSeconds < 1 {
-		retryAfterSeconds = 1
-	}
-	w.Header().Set("Retry-After", strconv.Itoa(retryAfterSeconds))
-	w.Header().Set("X-Bot-Barrier", "blocked")
-	http.Error(w, "Too Many Requests: zu viele Challenge-Abrufe, bitte später erneut versuchen", http.StatusTooManyRequests)
-}
-
 func writeBlacklistedResponse(w http.ResponseWriter) {
 	controller := http.NewResponseController(w)
 	if controller != nil {
@@ -748,88 +687,6 @@ func writeBlacklistedResponse(w http.ResponseWriter) {
 	}
 
 	panic(http.ErrAbortHandler)
-}
-
-func (bb *CaddyProtector) createPendingChallenge(key, returnPath string) (string, error) {
-	seed := make([]byte, challengeSeedLength)
-	if _, err := rand.Read(seed); err != nil {
-		return "", err
-	}
-
-	seedHex := hex.EncodeToString(seed)
-	now := time.Now()
-
-	bb.mu.Lock()
-	defer bb.mu.Unlock()
-
-	bb.cleanupExpiredLocked(now)
-	if len(bb.pending) >= bb.MaxPendingChallenges {
-		return "", fmt.Errorf("zu viele offene Challenges")
-	}
-	bb.pending[seedHex] = pendingChallenge{
-		Key:        key,
-		Seed:       append([]byte(nil), seed...),
-		ExpiresAt:  now.Add(time.Duration(bb.ValidFor)),
-		Attempts:   0,
-		ReturnPath: returnPath,
-	}
-
-	return seedHex, nil
-}
-
-// cleanupInterval berechnet das optimale Intervall für den periodischen Cleanup.
-func (bb *CaddyProtector) cleanupInterval() time.Duration {
-	interval := time.Duration(bb.ValidFor) / 2
-	if interval < 5*time.Second {
-		interval = 5 * time.Second
-	}
-	if interval > 60*time.Second {
-		interval = 60 * time.Second
-	}
-	return interval
-}
-
-// runCleanupLoop führt periodisch den Cleanup abgelaufener Einträge im Hintergrund durch.
-func (bb *CaddyProtector) runCleanupLoop(refresh time.Duration, stop chan struct{}, done chan struct{}) {
-	defer close(done)
-
-	ticker := time.NewTicker(refresh)
-	defer ticker.Stop()
-
-	for {
-		select {
-		case <-ticker.C:
-			bb.mu.Lock()
-			bb.cleanupExpiredLocked(time.Now())
-			bb.mu.Unlock()
-		case <-stop:
-			return
-		}
-	}
-}
-
-func (bb *CaddyProtector) cleanupExpiredLocked(now time.Time) {
-	for seed, pending := range bb.pending {
-		if now.After(pending.ExpiresAt) {
-			delete(bb.pending, seed)
-		}
-	}
-	for key, exp := range bb.allowed {
-		if now.After(exp) {
-			delete(bb.allowed, key)
-		}
-	}
-	for key, counter := range bb.challengeAttempts {
-		if !counter.BlockedUntil.IsZero() {
-			if now.After(counter.BlockedUntil) {
-				delete(bb.challengeAttempts, key)
-			}
-			continue
-		}
-		if !counter.FirstSeen.IsZero() && now.Sub(counter.FirstSeen) > time.Duration(bb.BlockFor) {
-			delete(bb.challengeAttempts, key)
-		}
-	}
 }
 
 func decodeVerifyRequest(r io.Reader) (verifyRequest, verifyDecodeInfo, error) {
@@ -860,6 +717,166 @@ func shortValue(value string, maxLen int) string {
 		return value
 	}
 	return value[:maxLen] + "…"
+}
+
+func (bb *CaddyProtector) loadSecretMaterial() ([]byte, error) {
+	if bb.Secret != "" && bb.SecretFile != "" {
+		return nil, fmt.Errorf("secret und secret_file dürfen nicht gleichzeitig gesetzt sein")
+	}
+	if bb.Secret != "" {
+		return []byte(bb.Secret), nil
+	}
+	if bb.SecretFile != "" {
+		content, err := os.ReadFile(bb.SecretFile)
+		if err != nil {
+			return nil, fmt.Errorf("secret_file konnte nicht gelesen werden: %w", err)
+		}
+		content = bytes.TrimSpace(content)
+		if len(content) == 0 {
+			return nil, fmt.Errorf("secret_file darf kein leeres Geheimnis enthalten")
+		}
+		return content, nil
+	}
+	return nil, fmt.Errorf("secret oder secret_file muss gesetzt sein")
+}
+
+func deriveMACKey(context string, secret []byte) []byte {
+	key := make([]byte, 32)
+	blake3.DeriveKey(context, secret, key)
+	return key
+}
+
+func parseSameSiteMode(raw string) (http.SameSite, error) {
+	switch strings.ToLower(strings.TrimSpace(raw)) {
+	case "lax":
+		return http.SameSiteLaxMode, nil
+	case "strict":
+		return http.SameSiteStrictMode, nil
+	case "none":
+		return http.SameSiteNoneMode, nil
+	default:
+		return 0, fmt.Errorf("cookie_same_site muss Lax, Strict oder None sein")
+	}
+}
+
+func (bb *CaddyProtector) createChallengeToken(seedHex, returnPath string, complexity int, now time.Time) (string, error) {
+	return bb.signValue(challengeTokenClaims{
+		Version:    tokenVersion,
+		Seed:       seedHex,
+		ExpiresAt:  now.Add(time.Duration(bb.ValidFor)).Unix(),
+		ReturnPath: safeReturnPathFrom(returnPath),
+		Complexity: complexity,
+	}, bb.challengeMACKey)
+}
+
+func (bb *CaddyProtector) verifyChallengeToken(raw string, now time.Time) (challengeTokenClaims, error) {
+	var claims challengeTokenClaims
+	if err := bb.verifySignedValue(raw, bb.challengeMACKey, &claims); err != nil {
+		return challengeTokenClaims{}, err
+	}
+	if claims.Version != tokenVersion {
+		return challengeTokenClaims{}, fmt.Errorf("unerwartete Token-Version")
+	}
+	if claims.ExpiresAt <= now.Unix() {
+		return challengeTokenClaims{}, fmt.Errorf("challenge_token ist abgelaufen")
+	}
+	if claims.ReturnPath == "" || safeReturnPathFrom(claims.ReturnPath) == "/" && claims.ReturnPath != "/" {
+		return challengeTokenClaims{}, fmt.Errorf("challenge_token enthält ungültigen return_to")
+	}
+	return claims, nil
+}
+
+func (bb *CaddyProtector) writeAllowCookie(w http.ResponseWriter, now time.Time) error {
+	value, err := bb.signValue(allowCookieClaims{
+		Version:   tokenVersion,
+		IssuedAt:  now.Unix(),
+		ExpiresAt: now.Add(time.Duration(bb.AllowFor)).Unix(),
+	}, bb.cookieMACKey)
+	if err != nil {
+		return err
+	}
+	sameSite, err := parseSameSiteMode(bb.CookieSameSite)
+	if err != nil {
+		return err
+	}
+	http.SetCookie(w, &http.Cookie{
+		Name:     bb.CookieName,
+		Value:    value,
+		Path:     bb.CookiePath,
+		Domain:   bb.CookieDomain,
+		HttpOnly: bb.CookieHTTPOnly,
+		Secure:   bb.CookieSecure,
+		SameSite: sameSite,
+		Expires:  now.Add(time.Duration(bb.AllowFor)),
+		MaxAge:   int(time.Duration(bb.AllowFor).Seconds()),
+	})
+	return nil
+}
+
+func (bb *CaddyProtector) hasValidAllowCookie(r *http.Request) bool {
+	cookie, err := r.Cookie(bb.CookieName)
+	if err != nil {
+		return false
+	}
+	var claims allowCookieClaims
+	if err := bb.verifySignedValue(cookie.Value, bb.cookieMACKey, &claims); err != nil {
+		return false
+	}
+	if claims.Version != tokenVersion {
+		return false
+	}
+	now := time.Now().Unix()
+	return claims.ExpiresAt > now && claims.IssuedAt <= now
+}
+
+func (bb *CaddyProtector) signValue(payload any, key []byte) (string, error) {
+	payloadJSON, err := json.Marshal(payload)
+	if err != nil {
+		return "", err
+	}
+	payloadPart := base64.RawURLEncoding.EncodeToString(payloadJSON)
+	mac, err := keyedMAC(key, []byte(payloadPart))
+	if err != nil {
+		return "", err
+	}
+	return payloadPart + "." + base64.RawURLEncoding.EncodeToString(mac), nil
+}
+
+func (bb *CaddyProtector) verifySignedValue(raw string, key []byte, out any) error {
+	payloadPart, macPart, ok := strings.Cut(raw, ".")
+	if !ok || payloadPart == "" || macPart == "" {
+		return fmt.Errorf("signierter Wert hat ungültiges Format")
+	}
+	expectedMAC, err := keyedMAC(key, []byte(payloadPart))
+	if err != nil {
+		return err
+	}
+	mac, err := base64.RawURLEncoding.DecodeString(macPart)
+	if err != nil {
+		return fmt.Errorf("MAC konnte nicht dekodiert werden: %w", err)
+	}
+	if subtle.ConstantTimeCompare(expectedMAC, mac) != 1 {
+		return fmt.Errorf("MAC ist ungültig")
+	}
+	payloadJSON, err := base64.RawURLEncoding.DecodeString(payloadPart)
+	if err != nil {
+		return fmt.Errorf("Payload konnte nicht dekodiert werden: %w", err)
+	}
+	if err := json.Unmarshal(payloadJSON, out); err != nil {
+		return fmt.Errorf("Payload konnte nicht dekodiert werden: %w", err)
+	}
+	return nil
+}
+
+func keyedMAC(key, data []byte) ([]byte, error) {
+	hasher, err := blake3.NewKeyed(key)
+	if err != nil {
+		return nil, err
+	}
+	if _, err := hasher.Write(data); err != nil {
+		return nil, err
+	}
+	return hasher.Sum(nil), nil
 }
 
 func validateIPListConfig(kind string, inline []string, _ string, rawURL string, refresh caddy.Duration) error {
@@ -1312,7 +1329,7 @@ func (bb *CaddyProtector) logIPListLoaded(mode, kind string, ipList *ipAllowlist
 	)
 }
 
-func (bb *CaddyProtector) handleVerify(w http.ResponseWriter, r *http.Request, key string, complexity int) error {
+func (bb *CaddyProtector) handleVerify(w http.ResponseWriter, r *http.Request, complexity int) error {
 	clientIP := getClientIP(r.Context(), r.RemoteAddr)
 	logger := bb.logger.With(
 		zap.String("event", "caddy_protector_verify"),
@@ -1352,21 +1369,9 @@ func (bb *CaddyProtector) handleVerify(w http.ResponseWriter, r *http.Request, k
 	}
 
 	logger = logger.With(
-		zap.String("seed", shortValue(req.Seed, 16)),
-		zap.Int("seed_hex_length", len(req.Seed)),
+		zap.Int("challenge_token_length", len(req.ChallengeToken)),
 		zap.Int("nonce_hex_length", len(req.Nonce)),
 	)
-
-	seedBytes, err := hex.DecodeString(req.Seed)
-	if err != nil || len(seedBytes) != challengeSeedLength {
-		logger.Warn("CaddyProtector-Verify fehlgeschlagen: Seed ist ungültig",
-			zap.Int("decoded_seed_length", len(seedBytes)),
-			zap.Int("expected_seed_length", challengeSeedLength),
-			zap.Error(err),
-		)
-		http.Error(w, "ungültiger Seed", http.StatusBadRequest)
-		return nil
-	}
 
 	nonceBytes, err := hex.DecodeString(req.Nonce)
 	if err != nil || len(nonceBytes) == 0 || len(nonceBytes) > maxNonceLength {
@@ -1380,47 +1385,32 @@ func (bb *CaddyProtector) handleVerify(w http.ResponseWriter, r *http.Request, k
 	}
 
 	now := time.Now()
-
-	bb.mu.Lock()
-
-	pending, ok := bb.pending[req.Seed]
-	keyMatches := ok && pending.Key == key
-	seedMatches := ok && bytes.Equal(pending.Seed, seedBytes)
-	challengeExpired := ok && now.After(pending.ExpiresAt)
-	if !ok || !keyMatches || !seedMatches || challengeExpired {
-		if ok {
-			delete(bb.pending, req.Seed)
-		}
-		bb.mu.Unlock()
-		logger.Warn("CaddyProtector-Verify fehlgeschlagen: Challenge passt nicht zum aktuellen Client oder ist abgelaufen",
-			zap.Bool("pending_found", ok),
-			zap.Bool("client_key_matches", keyMatches),
-			zap.Bool("seed_bytes_match", seedMatches),
-			zap.Bool("challenge_expired", challengeExpired),
-			zap.Time("pending_expires_at", pending.ExpiresAt),
-			zap.Duration("pending_time_remaining", time.Until(pending.ExpiresAt)),
-			zap.Int("pending_attempts", pending.Attempts),
-			zap.String("return_path", redactPathForLog(pending.ReturnPath)),
+	claims, err := bb.verifyChallengeToken(req.ChallengeToken, now)
+	if err != nil {
+		logger.Warn("CaddyProtector-Verify fehlgeschlagen: Challenge-Token ist ungültig",
+			zap.Error(err),
 		)
 		http.Error(w, "challenge abgelaufen", http.StatusForbidden)
 		return nil
 	}
-
-	pending.Attempts++
-	if pending.Attempts > maxVerifyAttempts {
-		delete(bb.pending, req.Seed)
-		bb.mu.Unlock()
-		logger.Warn("CaddyProtector-Verify fehlgeschlagen: zu viele Verify-Versuche",
-			zap.Int("attempts", pending.Attempts),
-			zap.Int("max_attempts", maxVerifyAttempts),
-			zap.String("return_path", redactPathForLog(pending.ReturnPath)),
+	if claims.Complexity != complexity {
+		logger.Warn("CaddyProtector-Verify fehlgeschlagen: Challenge-Token passt nicht zur aktuellen Complexity",
+			zap.Int("token_complexity", claims.Complexity),
+			zap.Int("required_complexity", complexity),
 		)
-		http.Error(w, "zu viele Versuche", http.StatusTooManyRequests)
+		http.Error(w, "challenge abgelaufen", http.StatusForbidden)
 		return nil
 	}
-
-	bb.pending[req.Seed] = pending
-	bb.mu.Unlock()
+	seedBytes, err := hex.DecodeString(claims.Seed)
+	if err != nil || len(seedBytes) != challengeSeedLength {
+		logger.Warn("CaddyProtector-Verify fehlgeschlagen: Seed im Challenge-Token ist ungültig",
+			zap.Int("decoded_seed_length", len(seedBytes)),
+			zap.Int("expected_seed_length", challengeSeedLength),
+			zap.Error(err),
+		)
+		http.Error(w, "challenge abgelaufen", http.StatusForbidden)
+		return nil
+	}
 
 	input := make([]byte, 0, len(seedBytes)+len(nonceBytes))
 	input = append(input, seedBytes...)
@@ -1433,26 +1423,23 @@ func (bb *CaddyProtector) handleVerify(w http.ResponseWriter, r *http.Request, k
 			zap.Int("leading_zero_bits", leadingZeroBits),
 			zap.Int("required_zero_bits", complexity),
 			zap.String("hash_prefix", hex.EncodeToString(sum[:4])),
-			zap.Int("attempts", pending.Attempts),
-			zap.String("return_path", redactPathForLog(pending.ReturnPath)),
+			zap.String("return_path", redactPathForLog(claims.ReturnPath)),
 		)
 		http.Error(w, "ungültige Lösung", http.StatusForbidden)
 		return nil
 	}
 
-	allowedUntil := now.Add(time.Duration(bb.AllowFor))
-	bb.mu.Lock()
-	delete(bb.pending, req.Seed)
-	bb.allowed[key] = allowedUntil
-	delete(bb.challengeAttempts, key)
-	returnTo := pending.ReturnPath
-	bb.mu.Unlock()
+	returnTo := safeReturnPathFrom(claims.ReturnPath)
+	if err := bb.writeAllowCookie(w, now); err != nil {
+		logger.Error("Freigabe-Cookie konnte nicht gesetzt werden", zap.Error(err))
+		http.Error(w, "Freigabe-Cookie konnte nicht gesetzt werden", http.StatusInternalServerError)
+		return nil
+	}
 
 	logger.Info("CaddyProtector-Verify erfolgreich",
 		zap.Int("leading_zero_bits", leadingZeroBits),
-		zap.Int("attempts", pending.Attempts),
 		zap.String("return_to", redactPathForLog(returnTo)),
-		zap.Time("allowed_until", allowedUntil),
+		zap.Time("allowed_until", now.Add(time.Duration(bb.AllowFor))),
 	)
 
 	w.Header().Set("Content-Type", "application/json")
@@ -1517,12 +1504,6 @@ func (bb *CaddyProtector) Cleanup() error {
 		<-bb.countryDone
 		bb.countryStop = nil
 		bb.countryDone = nil
-	}
-	if bb.cleanupStop != nil {
-		close(bb.cleanupStop)
-		<-bb.cleanupDone
-		bb.cleanupStop = nil
-		bb.cleanupDone = nil
 	}
 	bb.setCountryDB(nil)
 	return nil

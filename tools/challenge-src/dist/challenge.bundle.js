@@ -668,11 +668,25 @@ var CaddyProtector = (() => {
   var BLAKE3_HASH_BITS = 256;
   function fromHex(hex) {
     if (typeof hex !== "string" || hex.length % 2 !== 0 || !/^[0-9a-fA-F]*$/.test(hex)) {
-      throw new Error("ung\xFCltiger Hex-Wert");
+      throw new Error("ungueltiger Hex-Wert");
     }
     const out = new Uint8Array(hex.length / 2);
     for (let i = 0; i < out.length; i += 1) {
       out[i] = Number.parseInt(hex.slice(i * 2, i * 2 + 2), 16);
+    }
+    return out;
+  }
+  function fromBase64Url(value) {
+    if (typeof value !== "string" || value.length === 0) {
+      throw new Error("ungueltiger Base64URL-Wert");
+    }
+    const base64 = value.replace(/-/g, "+").replace(/_/g, "/");
+    const pad = (4 - base64.length % 4) % 4;
+    const normalized = base64 + "=".repeat(pad);
+    const binary = atob(normalized);
+    const out = new Uint8Array(binary.length);
+    for (let i = 0; i < binary.length; i += 1) {
+      out[i] = binary.charCodeAt(i);
     }
     return out;
   }
@@ -719,9 +733,23 @@ var CaddyProtector = (() => {
       node.textContent = message;
     }
   }
-  async function solveChallenge(seedHex, complexity, verifyPath, statusNode) {
+  function parseChallengeToken(challengeToken) {
+    if (typeof challengeToken !== "string" || challengeToken.length === 0) {
+      throw new Error("ungueltiges Challenge-Token");
+    }
+    const [payloadPart] = challengeToken.split(".", 1);
+    if (!payloadPart) {
+      throw new Error("ungueltiges Challenge-Token");
+    }
+    const claims = JSON.parse(new TextDecoder().decode(fromBase64Url(payloadPart)));
+    if (!claims || typeof claims.seed !== "string") {
+      throw new Error("ungueltiges Challenge-Token");
+    }
+    return claims;
+  }
+  async function solveChallenge(challengeToken, complexity, verifyPath, statusNode) {
     if (!Number.isInteger(complexity) || complexity < 0 || complexity > BLAKE3_HASH_BITS) {
-      throw new Error("ung\xFCltige Complexity");
+      throw new Error("ungueltige Complexity");
     }
     if (typeof import_blake3.default.initSimd === "function") {
       try {
@@ -729,13 +757,14 @@ var CaddyProtector = (() => {
       } catch (_) {
       }
     }
-    const seed = fromHex(seedHex);
+    const claims = parseChallengeToken(challengeToken);
+    const seed = fromHex(claims.seed);
     const nonce = new Uint8Array(16);
     const input = new Uint8Array(seed.length + nonce.length);
     input.set(seed, 0);
     crypto.getRandomValues(nonce);
     let lastYield = performance.now();
-    setStatus(statusNode, "Challenge wird gel\xF6st...");
+    setStatus(statusNode, "Challenge wird geloest...");
     while (true) {
       incrementNonce(nonce);
       input.set(nonce, seed.length);
@@ -748,7 +777,7 @@ var CaddyProtector = (() => {
             "Content-Type": "application/json"
           },
           body: JSON.stringify({
-            seed: seedHex,
+            challengeToken,
             nonce: toHex(nonce)
           })
         });

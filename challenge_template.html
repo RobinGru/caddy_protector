@@ -213,7 +213,7 @@
       <div class="spinner" aria-hidden="true"></div>
       <div class="progress-copy">
         <strong>Prüfung läuft</strong>
-        <p>Das dauert in der Regel nur wenige Sekunden.</p>
+        <p>Das dauert in der Regel nur kurz.</p>
         <div class="status" id="status">Prüfung wird vorbereitet...</div>
       </div>
     </section>
@@ -229,7 +229,7 @@
   <script nonce="{{ .CSPNonce }}">{{ .ChallengeJS }}</script>
   <script nonce="{{ .CSPNonce }}">
     CaddyProtector.solveChallenge(
-      window.__BOT_BARRIER__.seed,
+      window.__BOT_BARRIER__.challengeToken,
       window.__BOT_BARRIER__.complexity,
       window.__BOT_BARRIER__.verifyPath,
       document.getElementById("status")
