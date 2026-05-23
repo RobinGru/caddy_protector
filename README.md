@@ -11,20 +11,22 @@ Wichtig: Das Modul ist eine Hürde gegen Bots, Scraper und einfachen Abuse, aber
 Der Ablauf pro Request ist:
 
 1. `POST`-Requests auf `verify_path` werden immer intern verarbeitet und nie an den Upstream weitergereicht.
-2. Blacklist-Einträge werden sofort verworfen; die Verbindung wird ohne reguläre HTTP-Antwort beendet.
-3. Allowlist-Einträge passieren die Middleware direkt.
-4. Wenn `complexity` für den Request auf `0` aufgelöst wird, ist die Challenge deaktiviert.
-5. Requests mit gültigem Freigabe-Cookie dürfen bis zum Ablauf von `allow_for` passieren.
-6. Andere Clients erhalten eine Challenge-Seite mit signiertem Challenge-Token und Browser-Bundle.
-7. Der Browser extrahiert den Seed aus dem Challenge-Token und sucht einen `nonce`, für den `BLAKE3(seed || nonce)` genügend führende Null-Bits hat.
-8. Die Lösung wird als JSON mit `challengeToken` und `nonce` an `verify_path` gesendet.
-9. Der Server validiert zuerst den Token-MAC und die Token-Gültigkeit, dann die PoW-Lösung.
-10. Bei Erfolg setzt der Server ein signiertes `HttpOnly`-Cookie für `allow_for` Minuten.
+2. Einfache Request-Regeln für offensichtige Scanner-Ziele und grobe Exploit-Indikatoren werden vor allen weiteren Prüfungen ausgewertet.
+3. Blacklist-Einträge werden sofort verworfen; die Verbindung wird ohne reguläre HTTP-Antwort beendet.
+4. Allowlist-Einträge passieren die Middleware direkt.
+5. Wenn `complexity` für den Request auf `0` aufgelöst wird, ist die Challenge deaktiviert.
+6. Requests mit gültigem Freigabe-Cookie dürfen bis zum Ablauf von `allow_for` passieren.
+7. Andere Clients erhalten eine Challenge-Seite mit signiertem Challenge-Token und Browser-Bundle.
+8. Der Browser extrahiert den Seed aus dem Challenge-Token und sucht einen `nonce`, für den `BLAKE3(seed || nonce)` genügend führende Null-Bits hat.
+9. Die Lösung wird als JSON mit `challengeToken` und `nonce` an `verify_path` gesendet.
+10. Der Server validiert zuerst den Token-MAC und die Token-Gültigkeit, dann die PoW-Lösung.
+11. Bei Erfolg setzt der Server ein signiertes `HttpOnly`-Cookie für `allow_for` Minuten.
 
 ## Features
 
 - signierte Challenge-Token
 - signierte Freigabe-Cookies
+- stateless Request-Filter für offensichtige Scanner- und Exploit-Muster
 - konfigurierbare Schwierigkeit über statischen Wert oder Caddy-Placeholder
 - Allowlist und Blacklist per Inline-IP, Datei oder URL
 - Country-Filter per GeoIP-MMDB mit Whitelist- und Blacklist-Regeln
@@ -59,7 +61,11 @@ Alternativ kann das Modul in einen bestehenden eigenen Caddy-Build eingebunden w
 | `cookie_secure` | Setzt das `Secure`-Flag des Freigabe-Cookies. | `true` |
 | `cookie_http_only` | Setzt das `HttpOnly`-Flag des Freigabe-Cookies. | `true` |
 | `cookie_same_site` | `Lax`, `Strict` oder `None` für das Freigabe-Cookie. | `Lax` |
+| `built_in_rules` | Aktiviert einfache eingebaute Regeln für offensichtige Scanner-Ziele und grobe Exploit-Indikatoren. | `true` |
 | `verify_path` | Interner `POST`-Endpunkt für die Verifikation. | `/__caddy_protector/verify` |
+| `deny_path_prefix` | Sperrt Requests mit passendem Pfad-Präfix. Case-insensitive. Kann mehrfach angegeben werden. | - |
+| `deny_query_substring` | Sperrt Requests mit passendem Query-Teilstring. Prüft Raw Query und eine URL-dekodierte Variante. Case-insensitive. Kann mehrfach angegeben werden. | - |
+| `deny_header_substring` | Sperrt Requests, wenn ein Header-Wert einen Teilstring enthält. Syntax: `<header-name> <value>`. Case-insensitive. Kann mehrfach angegeben werden. | - |
 | `whitelist_ip` | Fügt eine einzelne IP oder ein CIDR-Präfix zur Allowlist hinzu. Kann mehrfach angegeben werden. | - |
 | `whitelist_file` | Lädt zusätzliche Allowlist-Einträge aus einer Datei. | - |
 | `whitelist_url` | Lädt zusätzliche Allowlist-Einträge von einer URL. | - |
@@ -84,8 +90,24 @@ Alternativ kann das Modul in einen bestehenden eigenen Caddy-Build eingebunden w
 - Genau eines von `secret` oder `secret_file` muss gesetzt sein.
 - `cookie_path` muss mit `/` beginnen.
 - `cookie_same_site` muss `Lax`, `Strict` oder `None` sein.
+- `built_in_rules` akzeptiert `true` oder `false`.
+- `deny_path_prefix`, `deny_query_substring` und `deny_header_substring` lehnen leere Werte ab.
+- `deny_header_substring` erwartet genau zwei Argumente: Header-Name und Teilstring.
+- Teilstrings mit Leerzeichen müssen im Caddyfile quoted werden, zum Beispiel `deny_query_substring "union select"`.
 - `whitelist_country` und `blacklist_country` erwarten ISO-3166-1-Alpha-2-Codes wie `DE` oder `RU`.
 - Wenn Country-Regeln verwendet werden, muss `country_url` gesetzt sein.
+
+### Einfache Request-Regeln
+
+Die Request-Regeln sind bewusst grob und billig. Sie sollen offensichtige Scanner-Ziele und primitive Exploit-Strings früh verwerfen. Sie sind keine vollwertige WAF und kein Ersatz für CRS.
+
+Wenn `built_in_rules true` aktiv ist, werden zusätzlich kleine eingebaute Heuristiken geladen:
+
+- Pfad-Präfixe wie `/.git`, `/.env`, `/wp-admin`, `/phpmyadmin` oder `/vendor/phpunit`
+- Query-Indikatoren wie `../`, `%2e%2e%2f`, `<script`, `union select`, `${jndi:`, `/etc/passwd` oder `cmd.exe`
+- Header-Indikatoren wie `User-Agent: sqlmap`, `nuclei`, `nikto`, `gobuster` oder Rewrite-Header mit `../`
+
+Treffer werden wie die IP-Blacklist behandelt: Der Request wird still verworfen, bevor Challenge, Cookie, Allowlist oder Upstream ins Spiel kommen.
 
 ### Allowlist und Blacklist
 
@@ -130,7 +152,12 @@ example.com {
     cookie_secure true
     cookie_http_only true
     cookie_same_site Lax
+    built_in_rules true
     verify_path /__caddy_protector/verify
+
+    deny_path_prefix /internal/debug
+    deny_query_substring "union select"
+    deny_header_substring User-Agent sqlmap
 
     whitelist_ip 66.249.64.0/19
     whitelist_file /etc/caddy/goodbots.ips

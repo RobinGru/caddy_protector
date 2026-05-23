@@ -62,8 +62,13 @@ func (w *hijackableResponseWriter) Hijack() (net.Conn, *bufio.ReadWriter, error)
 
 type testConn struct{ closed bool }
 
-func (c *testConn) Read(_ []byte) (int, error)         { return 0, io.EOF }
-func (c *testConn) Write(p []byte) (int, error)        { if c.closed { return 0, net.ErrClosed }; return len(p), nil }
+func (c *testConn) Read(_ []byte) (int, error) { return 0, io.EOF }
+func (c *testConn) Write(p []byte) (int, error) {
+	if c.closed {
+		return 0, net.ErrClosed
+	}
+	return len(p), nil
+}
 func (c *testConn) Close() error                       { c.closed = true; return nil }
 func (c *testConn) LocalAddr() net.Addr                { return &net.TCPAddr{} }
 func (c *testConn) RemoteAddr() net.Addr               { return &net.TCPAddr{} }
@@ -180,6 +185,46 @@ func TestValidateAcceptsSafeCSPScriptSrc(t *testing.T) {
 	bb.CSPScriptSrc = []string{"https://example.com", "'strict-dynamic'"}
 
 	if err := bb.Validate(); err != nil {
+		t.Fatalf("Validate() error = %v", err)
+	}
+}
+
+func TestValidateRejectsEmptyDenyPathPrefix(t *testing.T) {
+	bb := newTestProtector(t)
+	bb.DenyPathPrefixes = []string{"   "}
+
+	err := bb.Validate()
+	if err == nil || !strings.Contains(err.Error(), "deny_path_prefix") {
+		t.Fatalf("Validate() error = %v", err)
+	}
+}
+
+func TestValidateRejectsEmptyDenyQuerySubstring(t *testing.T) {
+	bb := newTestProtector(t)
+	bb.DenyQuerySubstrings = []string{""}
+
+	err := bb.Validate()
+	if err == nil || !strings.Contains(err.Error(), "deny_query_substring") {
+		t.Fatalf("Validate() error = %v", err)
+	}
+}
+
+func TestValidateRejectsEmptyDenyHeaderSubstringName(t *testing.T) {
+	bb := newTestProtector(t)
+	bb.DenyHeaderSubstrings = []HeaderSubstringRule{{Name: " ", Needle: "sqlmap"}}
+
+	err := bb.Validate()
+	if err == nil || !strings.Contains(err.Error(), "header-name") {
+		t.Fatalf("Validate() error = %v", err)
+	}
+}
+
+func TestValidateRejectsEmptyDenyHeaderSubstringNeedle(t *testing.T) {
+	bb := newTestProtector(t)
+	bb.DenyHeaderSubstrings = []HeaderSubstringRule{{Name: "User-Agent", Needle: " "}}
+
+	err := bb.Validate()
+	if err == nil || !strings.Contains(err.Error(), "deny_header_substring") {
 		t.Fatalf("Validate() error = %v", err)
 	}
 }
@@ -857,6 +902,143 @@ func TestServeHTTPRejectsNonPostVerifyPathBeforeAllowlist(t *testing.T) {
 	}
 	if rr.Code != http.StatusMethodNotAllowed {
 		t.Fatalf("Status = %d", rr.Code)
+	}
+}
+
+func TestServeHTTPDropsDenyPathPrefixBeforeChallenge(t *testing.T) {
+	bb := newTestProtector(t)
+	bb.DenyPathPrefixes = []string{"/wp-admin"}
+	if err := bb.Validate(); err != nil {
+		t.Fatalf("Validate() error = %v", err)
+	}
+
+	req := newChallengeRequest(http.MethodGet, "http://example.com/wp-admin/install.php", "192.0.2.1", "UA")
+	rr := newHijackableResponseWriter()
+	nextCalled := false
+
+	err := bb.ServeHTTP(rr, req, caddyhttp.HandlerFunc(func(w http.ResponseWriter, r *http.Request) error {
+		nextCalled = true
+		return nil
+	}))
+	if err != nil {
+		t.Fatalf("ServeHTTP() error = %v", err)
+	}
+	if nextCalled {
+		t.Fatal("next handler sollte bei deny_path_prefix nicht aufgerufen werden")
+	}
+	if !rr.conn.closed {
+		t.Fatal("Verbindung sollte bei deny_path_prefix geschlossen werden")
+	}
+}
+
+func TestServeHTTPDropsDenyQuerySubstringOnRawQuery(t *testing.T) {
+	bb := newTestProtector(t)
+	bb.DenyQuerySubstrings = []string{"union select"}
+	if err := bb.Validate(); err != nil {
+		t.Fatalf("Validate() error = %v", err)
+	}
+
+	req := newChallengeRequest(http.MethodGet, "http://example.com/search?q=1+UNION+SELECT+1", "192.0.2.1", "UA")
+	rr := newHijackableResponseWriter()
+
+	err := bb.ServeHTTP(rr, req, caddyhttp.HandlerFunc(func(w http.ResponseWriter, r *http.Request) error {
+		t.Fatal("next handler sollte bei deny_query_substring nicht aufgerufen werden")
+		return nil
+	}))
+	if err != nil {
+		t.Fatalf("ServeHTTP() error = %v", err)
+	}
+	if !rr.conn.closed {
+		t.Fatal("Verbindung sollte bei deny_query_substring geschlossen werden")
+	}
+}
+
+func TestServeHTTPDropsDenyQuerySubstringAfterOneDecode(t *testing.T) {
+	bb := newTestProtector(t)
+	bb.DenyQuerySubstrings = []string{"../"}
+	if err := bb.Validate(); err != nil {
+		t.Fatalf("Validate() error = %v", err)
+	}
+
+	req := newChallengeRequest(http.MethodGet, "http://example.com/download?file=%2e%2e%2fetc%2fpasswd", "192.0.2.1", "UA")
+	rr := newHijackableResponseWriter()
+
+	err := bb.ServeHTTP(rr, req, caddyhttp.HandlerFunc(func(w http.ResponseWriter, r *http.Request) error {
+		t.Fatal("next handler sollte bei dekodierter deny_query_substring nicht aufgerufen werden")
+		return nil
+	}))
+	if err != nil {
+		t.Fatalf("ServeHTTP() error = %v", err)
+	}
+	if !rr.conn.closed {
+		t.Fatal("Verbindung sollte bei dekodierter deny_query_substring geschlossen werden")
+	}
+}
+
+func TestServeHTTPDropsDenyHeaderSubstring(t *testing.T) {
+	bb := newTestProtector(t)
+	bb.DenyHeaderSubstrings = []HeaderSubstringRule{{Name: "User-Agent", Needle: "sqlmap"}}
+	if err := bb.Validate(); err != nil {
+		t.Fatalf("Validate() error = %v", err)
+	}
+
+	req := newChallengeRequest(http.MethodGet, "http://example.com/protected", "192.0.2.1", "Mozilla/5.0 sqlmap")
+	rr := newHijackableResponseWriter()
+
+	err := bb.ServeHTTP(rr, req, caddyhttp.HandlerFunc(func(w http.ResponseWriter, r *http.Request) error {
+		t.Fatal("next handler sollte bei deny_header_substring nicht aufgerufen werden")
+		return nil
+	}))
+	if err != nil {
+		t.Fatalf("ServeHTTP() error = %v", err)
+	}
+	if !rr.conn.closed {
+		t.Fatal("Verbindung sollte bei deny_header_substring geschlossen werden")
+	}
+}
+
+func TestServeHTTPDropsBuiltInPathRuleByDefault(t *testing.T) {
+	bb := newTestProtector(t)
+	req := newChallengeRequest(http.MethodGet, "http://example.com/.git/config", "192.0.2.1", "UA")
+	rr := newHijackableResponseWriter()
+
+	err := bb.ServeHTTP(rr, req, caddyhttp.HandlerFunc(func(w http.ResponseWriter, r *http.Request) error {
+		t.Fatal("next handler sollte bei built-in path rule nicht aufgerufen werden")
+		return nil
+	}))
+	if err != nil {
+		t.Fatalf("ServeHTTP() error = %v", err)
+	}
+	if !rr.conn.closed {
+		t.Fatal("Verbindung sollte bei built-in path rule geschlossen werden")
+	}
+}
+
+func TestServeHTTPDisablesBuiltInHeaderRuleWhenConfiguredOff(t *testing.T) {
+	bb := newTestProtector(t)
+	bb.BuiltInRules = false
+	bb.builtInRulesSet = true
+	if err := bb.Validate(); err != nil {
+		t.Fatalf("Validate() error = %v", err)
+	}
+
+	req := newChallengeRequest(http.MethodGet, "http://example.com/protected", "192.0.2.1", "Mozilla/5.0 sqlmap")
+	rr := httptest.NewRecorder()
+	nextCalled := false
+
+	err := bb.ServeHTTP(rr, req, caddyhttp.HandlerFunc(func(w http.ResponseWriter, r *http.Request) error {
+		nextCalled = true
+		w.WriteHeader(http.StatusNoContent)
+		return nil
+	}))
+	if err != nil {
+		t.Fatalf("ServeHTTP() error = %v", err)
+	}
+	if nextCalled {
+		t.Fatal("ohne Cookie und ohne built-in rule sollte weiterhin die Challenge ausgeliefert werden, nicht der Upstream")
+	}
+	if got := rr.Header().Get("X-Bot-Barrier"); got != "challenge" {
+		t.Fatalf("X-Bot-Barrier = %q, erwartet challenge", got)
 	}
 }
 

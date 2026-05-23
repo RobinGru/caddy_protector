@@ -6,8 +6,8 @@ import (
 	"time"
 
 	"github.com/caddyserver/caddy/v2"
-	caddyfileAdapter "github.com/caddyserver/caddy/v2/caddyconfig/caddyfile"
 	"github.com/caddyserver/caddy/v2/caddyconfig/caddyfile"
+	caddyfileAdapter "github.com/caddyserver/caddy/v2/caddyconfig/caddyfile"
 	"github.com/caddyserver/caddy/v2/caddyconfig/httpcaddyfile"
 )
 
@@ -24,7 +24,14 @@ caddy_protector {
 	cookie_secure false
 	cookie_http_only false
 	cookie_same_site Strict
+	built_in_rules false
 	verify_path /__caddy_protector/verify
+	deny_path_prefix /wp-admin
+	deny_path_prefix /.git
+	deny_query_substring "union select"
+	deny_query_substring ../
+	deny_header_substring User-Agent sqlmap
+	deny_header_substring X-Original-URL ../
 	whitelist_ip 66.249.64.0/19
 	whitelist_ip 2001:db8::/32
 	whitelist_file /etc/caddy/goodbots.ips
@@ -74,6 +81,21 @@ caddy_protector {
 	if bb.CookieSameSite != "Strict" {
 		t.Fatalf("CookieSameSite = %q", bb.CookieSameSite)
 	}
+	if bb.BuiltInRules {
+		t.Fatal("BuiltInRules sollte false sein")
+	}
+	if got := strings.Join(bb.DenyPathPrefixes, ","); got != "/wp-admin,/.git" {
+		t.Fatalf("DenyPathPrefixes = %q", got)
+	}
+	if got := strings.Join(bb.DenyQuerySubstrings, ","); got != "union select,../" {
+		t.Fatalf("DenyQuerySubstrings = %q", got)
+	}
+	if len(bb.DenyHeaderSubstrings) != 2 {
+		t.Fatalf("DenyHeaderSubstrings = %v, erwartet 2 Eintraege", bb.DenyHeaderSubstrings)
+	}
+	if bb.DenyHeaderSubstrings[0].Name != "User-Agent" || bb.DenyHeaderSubstrings[0].Needle != "sqlmap" {
+		t.Fatalf("erste DenyHeaderSubstrings-Regel = %#v", bb.DenyHeaderSubstrings[0])
+	}
 	if len(bb.WhitelistIPs) != 2 {
 		t.Fatalf("WhitelistIPs = %v, erwartet 2 Eintraege", bb.WhitelistIPs)
 	}
@@ -118,6 +140,47 @@ caddy_protector {
 	}
 	if !bb.DisableCSPHeader {
 		t.Fatal("DisableCSPHeader sollte true sein")
+	}
+}
+
+func TestUnmarshalCaddyfileDefaultsBuiltInRulesToValidatePhase(t *testing.T) {
+	bb := newTestProtector(t)
+	if !bb.BuiltInRules {
+		t.Fatal("BuiltInRules sollte standardmaessig aktiv sein")
+	}
+}
+
+func TestUnmarshalCaddyfileRejectsBadBuiltInRulesValue(t *testing.T) {
+	input := `
+caddy_protector {
+	built_in_rules kaputt
+}
+`
+
+	var bb CaddyProtector
+	err := bb.UnmarshalCaddyfile(caddyfile.NewTestDispenser(input))
+	if err == nil {
+		t.Fatal("erwarteter Fehler fuer ungueltigen built_in_rules-Wert fehlt")
+	}
+	if !strings.Contains(err.Error(), "built_in_rules-Wert") {
+		t.Fatalf("Fehler = %v, erwartet Hinweis auf built_in_rules", err)
+	}
+}
+
+func TestUnmarshalCaddyfileRejectsBadDenyHeaderSubstringArgCount(t *testing.T) {
+	input := `
+caddy_protector {
+	deny_header_substring User-Agent
+}
+`
+
+	var bb CaddyProtector
+	err := bb.UnmarshalCaddyfile(caddyfile.NewTestDispenser(input))
+	if err == nil {
+		t.Fatal("erwarteter Fehler fuer falsche deny_header_substring-Argumentanzahl fehlt")
+	}
+	if !strings.Contains(err.Error(), "genau 2 Argumente") {
+		t.Fatalf("Fehler = %v, erwartet Hinweis auf deny_header_substring", err)
 	}
 }
 

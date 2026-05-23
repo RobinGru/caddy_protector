@@ -4,8 +4,8 @@ import (
 	"bufio"
 	"bytes"
 	"context"
-	"crypto/subtle"
 	"crypto/rand"
+	"crypto/subtle"
 	"encoding/base64"
 	"encoding/hex"
 	"encoding/json"
@@ -17,6 +17,7 @@ import (
 	"net"
 	"net/http"
 	"net/netip"
+	"net/textproto"
 	"net/url"
 	"os"
 	"path"
@@ -42,20 +43,56 @@ var defaultHTML string
 var embeddedBundle string
 
 const (
-	defaultComplexity           = "18"
-	defaultVerifyPath           = "/__caddy_protector/verify"
-	defaultValidFor             = 120 * time.Minute
-	defaultAllowFor             = 1800 * time.Minute
-	defaultCookieName           = "caddy_protector"
-	maxVerifyBodyBytes          = 4096
-	challengeSeedLength         = 32
-	maxNonceLength              = 64
-	blake3HashBits              = 256
-	maxIPListBytes              = 10 << 20
-	maxCountryDBBytes           = 100 << 20
-	tokenVersion                = 1
-	challengeTokenContext       = "caddy_protector:challenge_token:v1"
-	cookieMACContext            = "caddy_protector:cookie_mac:v1"
+	defaultComplexity     = "18"
+	defaultVerifyPath     = "/__caddy_protector/verify"
+	defaultValidFor       = 120 * time.Minute
+	defaultAllowFor       = 1800 * time.Minute
+	defaultCookieName     = "caddy_protector"
+	maxVerifyBodyBytes    = 4096
+	challengeSeedLength   = 32
+	maxNonceLength        = 64
+	blake3HashBits        = 256
+	maxIPListBytes        = 10 << 20
+	maxCountryDBBytes     = 100 << 20
+	tokenVersion          = 1
+	challengeTokenContext = "caddy_protector:challenge_token:v1"
+	cookieMACContext      = "caddy_protector:cookie_mac:v1"
+)
+
+var (
+	builtInDenyPathPrefixes = []string{
+		"/.env",
+		"/.git",
+		"/.svn",
+		"/wp-admin",
+		"/wp-login.php",
+		"/xmlrpc.php",
+		"/phpmyadmin",
+		"/pma",
+		"/vendor/phpunit",
+		"/.well-known/acme-challenge/..",
+	}
+	builtInDenyQuerySubstrings = []string{
+		"../",
+		"..%2f",
+		"%2e%2e%2f",
+		"<script",
+		"union select",
+		"${jndi:",
+		"/etc/passwd",
+		"cmd.exe",
+	}
+	builtInDenyHeaderSubstrings = []HeaderSubstringRule{
+		{Name: "User-Agent", Needle: "sqlmap"},
+		{Name: "User-Agent", Needle: "nuclei"},
+		{Name: "User-Agent", Needle: "masscan"},
+		{Name: "User-Agent", Needle: "zgrab"},
+		{Name: "User-Agent", Needle: "nikto"},
+		{Name: "User-Agent", Needle: "gobuster"},
+		{Name: "User-Agent", Needle: "dirbuster"},
+		{Name: "X-Original-URL", Needle: "../"},
+		{Name: "X-Rewrite-URL", Needle: "../"},
+	}
 )
 
 type verifyRequest struct {
@@ -114,6 +151,28 @@ type allowCookieClaims struct {
 	ExpiresAt int64 `json:"exp"`
 }
 
+type HeaderSubstringRule struct {
+	Name   string `json:"name"`
+	Needle string `json:"needle"`
+}
+
+type compiledStringRule struct {
+	Value  string
+	Source string
+}
+
+type compiledHeaderRule struct {
+	Name   string
+	Needle string
+	Source string
+}
+
+type requestRuleMatch struct {
+	Source     string
+	Type       string
+	HeaderName string
+}
+
 // CaddyProtector ist ein Caddy-Middleware-Modul, das vor dem Zugriff auf HTTP-Ressourcen
 // das Lösen einer Rechen-Challenge verlangt.
 type CaddyProtector struct {
@@ -162,6 +221,18 @@ type CaddyProtector struct {
 
 	// CookieSameSite steuert das SameSite-Attribut des Freigabe-Cookies.
 	CookieSameSite string `json:"cookie_same_site,omitempty"`
+
+	// BuiltInRules aktiviert einfache eingebaute Scanner-/Exploit-Heuristiken.
+	BuiltInRules bool `json:"built_in_rules,omitempty"`
+
+	// DenyPathPrefixes sperrt Requests mit passenden Pfad-Präfixen.
+	DenyPathPrefixes []string `json:"deny_path_prefix,omitempty"`
+
+	// DenyQuerySubstrings sperrt Requests mit passenden Query-Teilstrings.
+	DenyQuerySubstrings []string `json:"deny_query_substring,omitempty"`
+
+	// DenyHeaderSubstrings sperrt Requests mit passenden Header-Teilstrings.
+	DenyHeaderSubstrings []HeaderSubstringRule `json:"deny_header_substring,omitempty"`
 
 	// WhitelistIPs sind IPs oder CIDR-Praefixe, die ohne Challenge weitergelassen werden.
 	WhitelistIPs []string `json:"whitelist_ip,omitempty"`
@@ -219,6 +290,10 @@ type CaddyProtector struct {
 	testCountryLoader   func(context.Context, string) (*countryDB, error)
 	challengeMACKey     []byte
 	cookieMACKey        []byte
+	compiledPathRules   []compiledStringRule
+	compiledQueryRules  []compiledStringRule
+	compiledHeaderRules []compiledHeaderRule
+	builtInRulesSet     bool
 }
 
 func (*CaddyProtector) CaddyModule() caddy.ModuleInfo {
@@ -258,6 +333,9 @@ func (bb *CaddyProtector) Provision(ctx caddy.Context) error {
 	}
 	if bb.CookieSameSite == "" {
 		bb.CookieSameSite = "Lax"
+	}
+	if !bb.builtInRulesSet && !bb.BuiltInRules {
+		bb.BuiltInRules = true
 	}
 	if err := bb.Validate(); err != nil {
 		return err
@@ -319,6 +397,7 @@ func (bb *CaddyProtector) Provision(ctx caddy.Context) error {
 		zap.Bool("cookie_secure", bb.cookieSecureValue()),
 		zap.Bool("cookie_http_only", bb.cookieHTTPOnlyValue()),
 		zap.String("cookie_same_site", bb.CookieSameSite),
+		zap.Bool("built_in_rules", bb.BuiltInRules),
 		zap.Strings("whitelist_ips", bb.WhitelistIPs),
 		zap.String("whitelist_file", bb.WhitelistFile),
 		zap.String("whitelist_url", bb.WhitelistURL),
@@ -337,6 +416,9 @@ func (bb *CaddyProtector) Provision(ctx caddy.Context) error {
 
 // Validate prüft die Konfiguration.
 func (bb *CaddyProtector) Validate() error {
+	if !bb.builtInRulesSet && !bb.BuiltInRules {
+		bb.BuiltInRules = true
+	}
 	whitelistCountries, err := normalizeCountryCodes("whitelist_country", bb.WhitelistCountries)
 	if err != nil {
 		return err
@@ -396,6 +478,9 @@ func (bb *CaddyProtector) Validate() error {
 	if _, err := parseSameSiteMode(bb.CookieSameSite); err != nil {
 		return err
 	}
+	if err := bb.compileRequestRules(); err != nil {
+		return err
+	}
 	return nil
 }
 
@@ -417,6 +502,18 @@ func (bb *CaddyProtector) ServeHTTP(w http.ResponseWriter, r *http.Request, next
 			return nil
 		}
 		return bb.handleVerify(w, r)
+	}
+	if match, ok := bb.matchRequestRules(r); ok {
+		fields := []zap.Field{
+			zap.String("rule_source", match.Source),
+			zap.String("rule_type", match.Type),
+		}
+		if match.HeaderName != "" {
+			fields = append(fields, zap.String("header_name", match.HeaderName))
+		}
+		logger.Warn("Request durch einfache Request-Regel verworfen", fields...)
+		writeBlacklistedResponse(w)
+		return nil
 	}
 
 	complexity := bb.resolveComplexity(r, logger)
@@ -567,6 +664,104 @@ func redactPathForLog(raw string) string {
 		return shortValue(raw, 128)
 	}
 	return redactURLForLog(u)
+}
+
+func normalizeRuleValue(kind, raw string) (string, error) {
+	value := strings.TrimSpace(raw)
+	if value == "" {
+		return "", fmt.Errorf("%s darf nicht leer sein", kind)
+	}
+	return strings.ToLower(value), nil
+}
+
+func (bb *CaddyProtector) compileRequestRules() error {
+	pathRules := make([]compiledStringRule, 0, len(bb.DenyPathPrefixes)+len(builtInDenyPathPrefixes))
+	queryRules := make([]compiledStringRule, 0, len(bb.DenyQuerySubstrings)+len(builtInDenyQuerySubstrings))
+	headerRules := make([]compiledHeaderRule, 0, len(bb.DenyHeaderSubstrings)+len(builtInDenyHeaderSubstrings))
+
+	for _, raw := range bb.DenyPathPrefixes {
+		value, err := normalizeRuleValue("deny_path_prefix", raw)
+		if err != nil {
+			return err
+		}
+		pathRules = append(pathRules, compiledStringRule{Value: value, Source: "config"})
+	}
+	for _, raw := range bb.DenyQuerySubstrings {
+		value, err := normalizeRuleValue("deny_query_substring", raw)
+		if err != nil {
+			return err
+		}
+		queryRules = append(queryRules, compiledStringRule{Value: value, Source: "config"})
+	}
+	for i, rule := range bb.DenyHeaderSubstrings {
+		name := textproto.CanonicalMIMEHeaderKey(strings.TrimSpace(rule.Name))
+		if name == "" {
+			return fmt.Errorf("deny_header_substring header-name darf nicht leer sein")
+		}
+		needle, err := normalizeRuleValue("deny_header_substring", rule.Needle)
+		if err != nil {
+			return err
+		}
+		bb.DenyHeaderSubstrings[i] = HeaderSubstringRule{Name: name, Needle: strings.TrimSpace(rule.Needle)}
+		headerRules = append(headerRules, compiledHeaderRule{Name: name, Needle: needle, Source: "config"})
+	}
+
+	if bb.BuiltInRules {
+		for _, raw := range builtInDenyPathPrefixes {
+			pathRules = append(pathRules, compiledStringRule{Value: raw, Source: "builtin"})
+		}
+		for _, raw := range builtInDenyQuerySubstrings {
+			queryRules = append(queryRules, compiledStringRule{Value: raw, Source: "builtin"})
+		}
+		for _, rule := range builtInDenyHeaderSubstrings {
+			headerRules = append(headerRules, compiledHeaderRule{
+				Name:   textproto.CanonicalMIMEHeaderKey(rule.Name),
+				Needle: strings.ToLower(rule.Needle),
+				Source: "builtin",
+			})
+		}
+	}
+
+	bb.compiledPathRules = pathRules
+	bb.compiledQueryRules = queryRules
+	bb.compiledHeaderRules = headerRules
+	return nil
+}
+
+func (bb *CaddyProtector) matchRequestRules(r *http.Request) (requestRuleMatch, bool) {
+	pathValue := r.URL.EscapedPath()
+	if pathValue == "" {
+		pathValue = r.URL.Path
+	}
+	pathValue = strings.ToLower(pathValue)
+	for _, rule := range bb.compiledPathRules {
+		if strings.HasPrefix(pathValue, rule.Value) {
+			return requestRuleMatch{Source: rule.Source, Type: "path_prefix"}, true
+		}
+	}
+
+	rawQuery := strings.ToLower(r.URL.RawQuery)
+	decodedQuery := ""
+	if r.URL.RawQuery != "" {
+		if unescaped, err := url.QueryUnescape(r.URL.RawQuery); err == nil {
+			decodedQuery = strings.ToLower(unescaped)
+		}
+	}
+	for _, rule := range bb.compiledQueryRules {
+		if strings.Contains(rawQuery, rule.Value) || (decodedQuery != "" && strings.Contains(decodedQuery, rule.Value)) {
+			return requestRuleMatch{Source: rule.Source, Type: "query_substring"}, true
+		}
+	}
+
+	for _, rule := range bb.compiledHeaderRules {
+		for _, value := range r.Header.Values(rule.Name) {
+			if strings.Contains(strings.ToLower(value), rule.Needle) {
+				return requestRuleMatch{Source: rule.Source, Type: "header_substring", HeaderName: rule.Name}, true
+			}
+		}
+	}
+
+	return requestRuleMatch{}, false
 }
 
 func (bb *CaddyProtector) serveChallenge(w http.ResponseWriter, r *http.Request, complexity int) error {

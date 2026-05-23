@@ -62,6 +62,18 @@ func (bb *CaddyProtector) UnmarshalCaddyfile(d *caddyfile.Dispenser) error {
 				continue
 			}
 
+			if param == "deny_header_substring" {
+				args := d.RemainingArgs()
+				if len(args) != 2 {
+					return d.Errf("deny_header_substring erwartet genau 2 Argumente: <header-name> <value>")
+				}
+				bb.DenyHeaderSubstrings = append(bb.DenyHeaderSubstrings, HeaderSubstringRule{
+					Name:   args[0],
+					Needle: args[1],
+				})
+				continue
+			}
+
 			var arg string
 			if !d.AllArgs(&arg) {
 				return d.ArgErr()
@@ -104,10 +116,21 @@ func (bb *CaddyProtector) UnmarshalCaddyfile(d *caddyfile.Dispenser) error {
 					return d.Errf("ungueltiger cookie_http_only-Wert: %v", err)
 				}
 				bb.CookieHTTPOnly = &value
+			case "built_in_rules":
+				value, err := strconv.ParseBool(arg)
+				if err != nil {
+					return d.Errf("ungueltiger built_in_rules-Wert: %v", err)
+				}
+				bb.BuiltInRules = value
+				bb.builtInRulesSet = true
 			case "cookie_same_site":
 				bb.CookieSameSite = arg
 			case "verify_path":
 				bb.VerifyPath = arg
+			case "deny_path_prefix":
+				bb.DenyPathPrefixes = append(bb.DenyPathPrefixes, arg)
+			case "deny_query_substring":
+				bb.DenyQuerySubstrings = append(bb.DenyQuerySubstrings, arg)
 			case "whitelist_ip":
 				bb.WhitelistIPs = append(bb.WhitelistIPs, arg)
 			case "whitelist_file":
