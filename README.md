@@ -2,12 +2,7 @@
 
 `caddy_protector` ist ein HTTP-Middleware-Modul für Caddy. Es schützt Upstreams mit einer browserseitigen Proof-of-Work-Challenge und gibt Clients erst nach erfolgreicher Verifikation für eine konfigurierbare Zeit frei.
 
-Die aktuelle Implementierung ist stateless:
-
-- signiertes Freigabe-Cookie statt serverseitiger Freigabeliste
-- BLAKE3 keyed MAC für Challenge-Token und Cookie
-- kein Client-Secret im Browser
-- keine Bindung der Freigabe an `Client-IP + User-Agent`
+Die Freigabe erfolgt über ein signiertes `HttpOnly`-Cookie. Challenge-Token und Cookie werden serverseitig mit BLAKE3 keyed MAC geschützt; das Secret bleibt ausschließlich auf dem Server.
 
 Wichtig: Das Modul ist eine Hürde gegen Bots, Scraper und einfachen Abuse, aber kein Ersatz für Authentifizierung, Autorisierung, Rate Limiting oder eine WAF.
 
@@ -28,8 +23,8 @@ Der Ablauf pro Request ist:
 
 ## Features
 
-- stateless signierte Challenge-Token
-- stateless signierte Freigabe-Cookies
+- signierte Challenge-Token
+- signierte Freigabe-Cookies
 - konfigurierbare Schwierigkeit über statischen Wert oder Caddy-Placeholder
 - Allowlist und Blacklist per Inline-IP, Datei oder URL
 - Country-Filter per GeoIP-MMDB mit Whitelist- und Blacklist-Regeln
@@ -91,7 +86,6 @@ Alternativ kann das Modul in einen bestehenden eigenen Caddy-Build eingebunden w
 - `cookie_same_site` muss `Lax`, `Strict` oder `None` sein.
 - `whitelist_country` und `blacklist_country` erwarten ISO-3166-1-Alpha-2-Codes wie `DE` oder `RU`.
 - Wenn Country-Regeln verwendet werden, muss `country_url` gesetzt sein.
-- `max_pending_challenges`, `max_challenge_attempts`, `block_for`, `seed_cookie_name`, `solution_cookie_name` und `mac_cookie_name` werden nicht unterstützt.
 
 ### Allowlist und Blacklist
 
@@ -208,7 +202,7 @@ Wenn ein eigenes Template verwendet wird, sollte es diese Daten verarbeiten:
 
 ## Cookies und Proxies
 
-CaddyProtector setzt ein eigenes signiertes Freigabe-Cookie. Das Cookie enthält nur Zeitinformationen und ist nicht an IP oder User-Agent gebunden. Dadurch bleiben Freigaben bei IP-Wechseln stabiler, aber ein gestohlenes Cookie ist bis zum Ablauf wiederverwendbar. `cookie_secure true` sollte deshalb nur über HTTPS betrieben werden und praktisch immer aktiv bleiben.
+CaddyProtector setzt ein eigenes signiertes Freigabe-Cookie. Wer ein gültiges Cookie besitzt, ist bis zum Ablauf freigegeben. `cookie_secure true` sollte deshalb nur über HTTPS betrieben werden und praktisch immer aktiv bleiben.
 
 Das Challenge-Token und das Freigabe-Cookie werden serverseitig mit BLAKE3 keyed MAC geschützt. Der Browser kennt das Geheimnis nicht.
 
