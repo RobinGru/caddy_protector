@@ -583,6 +583,40 @@ func TestFetchURLBytesLimitedRejectsOversizedContentLength(t *testing.T) {
 	}
 }
 
+func TestFetchURLBytesAllowsIPListsUpTo100MiB(t *testing.T) {
+	payload := bytes.Repeat([]byte("a"), maxIPListBytes)
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		_, _ = w.Write(payload)
+	}))
+	defer server.Close()
+
+	bb := newTestProtector(t)
+	body, err := bb.fetchURLBytes(context.Background(), "whitelist", server.URL)
+	if err != nil {
+		t.Fatalf("fetchURLBytes() error = %v", err)
+	}
+	if len(body) != len(payload) {
+		t.Fatalf("fetchURLBytes() len = %d, want %d", len(body), len(payload))
+	}
+}
+
+func TestFetchURLBytesAllowsBlacklistUpTo100MiB(t *testing.T) {
+	payload := bytes.Repeat([]byte("a"), maxIPListBytes)
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		_, _ = w.Write(payload)
+	}))
+	defer server.Close()
+
+	bb := newTestProtector(t)
+	body, err := bb.fetchURLBytes(context.Background(), "blacklist", server.URL)
+	if err != nil {
+		t.Fatalf("fetchURLBytes() error = %v", err)
+	}
+	if len(body) != len(payload) {
+		t.Fatalf("fetchURLBytes() len = %d, want %d", len(body), len(payload))
+	}
+}
+
 func TestNoSetCookieHeaderOnChallengePage(t *testing.T) {
 	bb := newTestProtector(t)
 	req := newChallengeRequest(http.MethodGet, "http://example.com/protected", "192.0.2.1", "UA")

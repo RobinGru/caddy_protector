@@ -52,7 +52,7 @@ const (
 	challengeSeedLength   = 32
 	maxNonceLength        = 64
 	blake3HashBits        = 256
-	maxIPListBytes        = 10 << 20
+	maxIPListBytes        = 100 << 20
 	maxCountryDBBytes     = 100 << 20
 	tokenVersion          = 1
 	challengeTokenContext = "caddy_protector:challenge_token:v1"
