@@ -1074,7 +1074,7 @@ func TestServeHTTPDropsDenyHeaderSubstring(t *testing.T) {
 		t.Fatalf("Validate() error = %v", err)
 	}
 
-	req := newChallengeRequest(http.MethodGet, "http://example.com/protected", "192.0.2.1", "Mozilla/5.0 sqlmap")
+	req := newChallengeRequest(http.MethodGet, "http://example.com/protected", "192.0.2.1", "Mozilla sqlmap")
 	rr := newHijackableResponseWriter()
 
 	err := bb.ServeHTTP(rr, req, caddyhttp.HandlerFunc(func(w http.ResponseWriter, r *http.Request) error {
@@ -1086,6 +1086,121 @@ func TestServeHTTPDropsDenyHeaderSubstring(t *testing.T) {
 	}
 	if !rr.conn.closed {
 		t.Fatal("Verbindung sollte bei deny_header_substring geschlossen werden")
+	}
+}
+
+func TestServeHTTPBuiltInRulesDropGenericDotfile(t *testing.T) {
+	bb := newTestProtector(t)
+	req := newChallengeRequest(http.MethodGet, "http://example.com/assets/.gitignore", "192.0.2.1", "UA")
+	rr := newHijackableResponseWriter()
+
+	err := bb.ServeHTTP(rr, req, caddyhttp.HandlerFunc(func(w http.ResponseWriter, r *http.Request) error {
+		t.Fatal("next handler sollte bei built-in dotfile nicht aufgerufen werden")
+		return nil
+	}))
+	if err != nil {
+		t.Fatalf("ServeHTTP() error = %v", err)
+	}
+	if !rr.conn.closed {
+		t.Fatal("Verbindung sollte bei built-in dotfile geschlossen werden")
+	}
+}
+
+func TestServeHTTPBuiltInRulesAllowWellKnownDotPath(t *testing.T) {
+	bb := newTestProtector(t)
+	req := newChallengeRequest(http.MethodGet, "http://example.com/.well-known/acme-challenge/token", "192.0.2.1", "UA")
+	rr := httptest.NewRecorder()
+
+	err := bb.ServeHTTP(rr, req, caddyhttp.HandlerFunc(func(w http.ResponseWriter, r *http.Request) error {
+		w.WriteHeader(http.StatusNoContent)
+		return nil
+	}))
+	if err != nil {
+		t.Fatalf("ServeHTTP() error = %v", err)
+	}
+	if rr.Code != http.StatusOK {
+		t.Fatalf("Status = %d, erwartet Challenge-Seite mit 200", rr.Code)
+	}
+	if rr.Header().Get("X-Bot-Barrier") != "challenge" {
+		t.Fatal("/.well-known/ sollte in die normale Challenge laufen statt von der Dotfile-Regel blockiert zu werden")
+	}
+}
+
+func TestServeHTTPBuiltInRulesDropSensitiveFilename(t *testing.T) {
+	bb := newTestProtector(t)
+	req := newChallengeRequest(http.MethodGet, "http://example.com/config/credentials.yml.enc", "192.0.2.1", "UA")
+	rr := newHijackableResponseWriter()
+
+	err := bb.ServeHTTP(rr, req, caddyhttp.HandlerFunc(func(w http.ResponseWriter, r *http.Request) error {
+		t.Fatal("next handler sollte bei sensitive filename nicht aufgerufen werden")
+		return nil
+	}))
+	if err != nil {
+		t.Fatalf("ServeHTTP() error = %v", err)
+	}
+	if !rr.conn.closed {
+		t.Fatal("Verbindung sollte bei sensitive filename geschlossen werden")
+	}
+}
+
+func TestServeHTTPBuiltInRulesDropBackupExtension(t *testing.T) {
+	bb := newTestProtector(t)
+	req := newChallengeRequest(http.MethodGet, "http://example.com/export/users.sql.gz", "192.0.2.1", "UA")
+	rr := newHijackableResponseWriter()
+
+	err := bb.ServeHTTP(rr, req, caddyhttp.HandlerFunc(func(w http.ResponseWriter, r *http.Request) error {
+		t.Fatal("next handler sollte bei Backup-/Dump-Endung nicht aufgerufen werden")
+		return nil
+	}))
+	if err != nil {
+		t.Fatalf("ServeHTTP() error = %v", err)
+	}
+	if !rr.conn.closed {
+		t.Fatal("Verbindung sollte bei Backup-/Dump-Endung geschlossen werden")
+	}
+}
+
+func TestServeHTTPAggressiveBuiltInRulesDropDependencyManifest(t *testing.T) {
+	bb := newTestProtector(t)
+	bb.AggressiveBuiltInRules = boolPtr(true)
+	if err := bb.Validate(); err != nil {
+		t.Fatalf("Validate() error = %v", err)
+	}
+
+	req := newChallengeRequest(http.MethodGet, "http://example.com/app/package-lock.json", "192.0.2.1", "UA")
+	rr := newHijackableResponseWriter()
+
+	err := bb.ServeHTTP(rr, req, caddyhttp.HandlerFunc(func(w http.ResponseWriter, r *http.Request) error {
+		t.Fatal("next handler sollte bei aggressiver Manifest-Regel nicht aufgerufen werden")
+		return nil
+	}))
+	if err != nil {
+		t.Fatalf("ServeHTTP() error = %v", err)
+	}
+	if !rr.conn.closed {
+		t.Fatal("Verbindung sollte bei aggressiver Manifest-Regel geschlossen werden")
+	}
+}
+
+func TestServeHTTPAggressiveBuiltInRulesDropAPIExplorer(t *testing.T) {
+	bb := newTestProtector(t)
+	bb.AggressiveBuiltInRules = boolPtr(true)
+	if err := bb.Validate(); err != nil {
+		t.Fatalf("Validate() error = %v", err)
+	}
+
+	req := newChallengeRequest(http.MethodGet, "http://example.com/docs/graphql-playground", "192.0.2.1", "UA")
+	rr := newHijackableResponseWriter()
+
+	err := bb.ServeHTTP(rr, req, caddyhttp.HandlerFunc(func(w http.ResponseWriter, r *http.Request) error {
+		t.Fatal("next handler sollte bei aggressiver API-Explorer-Regel nicht aufgerufen werden")
+		return nil
+	}))
+	if err != nil {
+		t.Fatalf("ServeHTTP() error = %v", err)
+	}
+	if !rr.conn.closed {
+		t.Fatal("Verbindung sollte bei aggressiver API-Explorer-Regel geschlossen werden")
 	}
 }
 

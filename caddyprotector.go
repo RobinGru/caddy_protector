@@ -21,6 +21,7 @@ import (
 	"net/url"
 	"os"
 	"path"
+	"regexp"
 	"strconv"
 	"strings"
 	"sync"
@@ -106,6 +107,11 @@ var (
 		"/wp-login.php",
 		"/xmlrpc.php",
 	}
+	builtInDenyPathRegexps = []string{
+		`(?:^|/)(?:\.[^/]+)(?:/|$)`,
+		`(?:^|/)(?:database|config|settingss?|settings|credentials|secrets?|local_settings|\.env(?:\..*)?|\.htaccess|\.htpasswd|\.user\.ini|phpinfo\.php|wp-config(?:-sample)?\.php|debug\.log|error_log|id_rsa|id_ed25519|authorized_keys|known_hosts|db\.sqlite3|local\.xml|master\.key|credentials\.ya?ml\.enc|ansible\.cfg|inventory\.ini|artisan|server\.php|manage\.py)(?:/|$)`,
+		`\.(?:sql|sqlite|sqlite3|db|dump|bak|backup|old|orig|save|swp|swo|tmp|temp|tar|tgz|gz|7z|rar|log|pem|key|crt|csr|p12|pfx|jks|keystore|inc|phps|map)(?:/|$)|~$`,
+	}
 	aggressiveBuiltInDenyPathPrefixes = []string{
 		"/actuator",
 		"/api/v4",
@@ -113,6 +119,9 @@ var (
 		"/wp-content",
 		"/wp-includes",
 		"/wp-json",
+	}
+	aggressiveBuiltInDenyPathRegexps = []string{
+		`(?:^|/)(?:composer\.(?:json|lock)|package(?:-lock)?\.json|npm-shrinkwrap\.json|yarn\.lock|pnpm-lock\.yaml|bun\.lockb|Pipfile(?:\.lock)?|requirements(?:-.*)?\.txt|pyproject\.toml|poetry\.lock|Gemfile(?:\.lock)?|go\.(?:mod|sum)|Cargo\.(?:toml|lock)|pom\.xml|build\.gradle|gradle\.properties|settings\.gradle|Dockerfile|docker-compose\.ya?ml|compose\.ya?ml|Jenkinsfile|Makefile|\.dockerignore|\.editorconfig|\.npmrc|\.yarnrc(?:\.yml)?|\.pnpmrc|\.bashrc|\.zshrc|\.profile|\.bash_history|\.DS_Store|Thumbs\.db|desktop\.ini|web\.config|appsettings(?:\..*)?\.json|application(?:-.*)?\.(?:properties|ya?ml)|bootstrap\.(?:properties|ya?ml)|logback\.xml|terraform\.tfstate|.*\.tfvars|phpunit\.xml(?:\.dist)?|pytest\.ini|tox\.ini|jest\.config\.(?:js|ts)|vite\.config\.(?:js|ts|mjs|cjs)|webpack\.config\.(?:js|ts)|next\.config\.(?:js|mjs|ts)|nuxt\.config\.(?:js|ts)|tsconfig\.json|jsconfig\.json|swagger|swagger-ui|swagger-ui\.html|swagger\.(?:json|ya?ml)|openapi\.(?:json|ya?ml)|api-docs|graphql-playground|graphiql|console|_profiler|_wdt|debugbar|telescope|horizon|adminer\.php|phpmyadmin|pma|server-status|server-info|nginx_status|metrics)(?:/|$)`,
 	}
 	builtInDenyQuerySubstrings = []string{
 		"../",
@@ -249,6 +258,11 @@ type compiledStringRule struct {
 	Source string
 }
 
+type compiledRegexRule struct {
+	Pattern *regexp.Regexp
+	Source  string
+}
+
 type compiledHeaderRule struct {
 	Name   string
 	Needle string
@@ -364,29 +378,30 @@ type CaddyProtector struct {
 	// CountryRefresh bestimmt das Refresh-Intervall fuer die Country-MMDB.
 	CountryRefresh caddy.Duration `json:"country_url_refresh,omitempty"`
 
-	challengeTemplate   *template.Template
-	logger              *zap.Logger
-	allowlist           atomic.Value
-	blacklist           atomic.Value
-	countryDBMu         sync.RWMutex
-	countryDB           *countryDB
-	allowlistStop       chan struct{}
-	allowlistDone       chan struct{}
-	blacklistStop       chan struct{}
-	blacklistDone       chan struct{}
-	countryStop         chan struct{}
-	countryDone         chan struct{}
-	whitelistCountrySet map[string]struct{}
-	blacklistCountrySet map[string]struct{}
-	hasCountryRules     bool
-	hasCountryWhitelist bool
-	testCountryLookup   func(netip.Addr) (string, bool)
-	testCountryLoader   func(context.Context, string) (*countryDB, error)
-	challengeMACKey     []byte
-	cookieMACKey        []byte
-	compiledPathRules   []compiledStringRule
-	compiledQueryRules  []compiledStringRule
-	compiledHeaderRules []compiledHeaderRule
+	challengeTemplate      *template.Template
+	logger                 *zap.Logger
+	allowlist              atomic.Value
+	blacklist              atomic.Value
+	countryDBMu            sync.RWMutex
+	countryDB              *countryDB
+	allowlistStop          chan struct{}
+	allowlistDone          chan struct{}
+	blacklistStop          chan struct{}
+	blacklistDone          chan struct{}
+	countryStop            chan struct{}
+	countryDone            chan struct{}
+	whitelistCountrySet    map[string]struct{}
+	blacklistCountrySet    map[string]struct{}
+	hasCountryRules        bool
+	hasCountryWhitelist    bool
+	testCountryLookup      func(netip.Addr) (string, bool)
+	testCountryLoader      func(context.Context, string) (*countryDB, error)
+	challengeMACKey        []byte
+	cookieMACKey           []byte
+	compiledPathRules      []compiledStringRule
+	compiledPathRegexRules []compiledRegexRule
+	compiledQueryRules     []compiledStringRule
+	compiledHeaderRules    []compiledHeaderRule
 }
 
 func (*CaddyProtector) CaddyModule() caddy.ModuleInfo {
@@ -787,8 +802,10 @@ func normalizeRuleValue(kind, raw string) (string, error) {
 
 func (bb *CaddyProtector) compileRequestRules() error {
 	pathCapacity := len(bb.DenyPathPrefixes) + len(builtInDenyPathPrefixes) + len(aggressiveBuiltInDenyPathPrefixes)
+	pathRegexCapacity := len(builtInDenyPathRegexps) + len(aggressiveBuiltInDenyPathRegexps)
 	queryCapacity := len(bb.DenyQuerySubstrings) + len(builtInDenyQuerySubstrings) + len(aggressiveBuiltInDenyQuerySubstrings)
 	pathRules := make([]compiledStringRule, 0, pathCapacity)
+	pathRegexRules := make([]compiledRegexRule, 0, pathRegexCapacity)
 	queryRules := make([]compiledStringRule, 0, queryCapacity)
 	headerRules := make([]compiledHeaderRule, 0, len(bb.DenyHeaderSubstrings)+len(builtInDenyHeaderSubstrings))
 
@@ -823,6 +840,13 @@ func (bb *CaddyProtector) compileRequestRules() error {
 		for _, raw := range builtInDenyPathPrefixes {
 			pathRules = append(pathRules, compiledStringRule{Value: raw, Source: "builtin"})
 		}
+		for _, raw := range builtInDenyPathRegexps {
+			pattern, err := regexp.Compile(`(?i)` + raw)
+			if err != nil {
+				return fmt.Errorf("eingebaute path-regexp-Regel ist ungueltig: %w", err)
+			}
+			pathRegexRules = append(pathRegexRules, compiledRegexRule{Pattern: pattern, Source: "builtin"})
+		}
 		for _, raw := range builtInDenyQuerySubstrings {
 			queryRules = append(queryRules, compiledStringRule{Value: raw, Source: "builtin"})
 		}
@@ -838,12 +862,20 @@ func (bb *CaddyProtector) compileRequestRules() error {
 		for _, raw := range aggressiveBuiltInDenyPathPrefixes {
 			pathRules = append(pathRules, compiledStringRule{Value: raw, Source: "builtin_aggressive"})
 		}
+		for _, raw := range aggressiveBuiltInDenyPathRegexps {
+			pattern, err := regexp.Compile(`(?i)` + raw)
+			if err != nil {
+				return fmt.Errorf("eingebaute aggressive path-regexp-Regel ist ungueltig: %w", err)
+			}
+			pathRegexRules = append(pathRegexRules, compiledRegexRule{Pattern: pattern, Source: "builtin_aggressive"})
+		}
 		for _, raw := range aggressiveBuiltInDenyQuerySubstrings {
 			queryRules = append(queryRules, compiledStringRule{Value: raw, Source: "builtin_aggressive"})
 		}
 	}
 
 	bb.compiledPathRules = pathRules
+	bb.compiledPathRegexRules = pathRegexRules
 	bb.compiledQueryRules = queryRules
 	bb.compiledHeaderRules = headerRules
 	return nil
@@ -862,6 +894,16 @@ func (bb *CaddyProtector) matchRequestRules(r *http.Request) (requestRuleMatch, 
 		for _, value := range pathValues {
 			if strings.HasPrefix(value, rule.Value) {
 				return requestRuleMatch{Source: rule.Source, Type: "path_prefix"}, true
+			}
+		}
+	}
+	for _, rule := range bb.compiledPathRegexRules {
+		for _, value := range pathValues {
+			if strings.HasPrefix(value, "/.well-known/") {
+				continue
+			}
+			if rule.Pattern.MatchString(value) {
+				return requestRuleMatch{Source: rule.Source, Type: "path_regexp"}, true
 			}
 		}
 	}

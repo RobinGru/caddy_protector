@@ -121,13 +121,16 @@ Wenn du das Verhalten zunächst nur beobachten willst, kombiniere `instrumentati
 
 Die Request-Regeln sind bewusst grob und billig. Sie sollen offensichtliche Scanner-Ziele und primitive Exploit-Strings früh verwerfen. Sie sind keine vollwertige WAF und kein Ersatz für CRS.
 
-Wenn `built_in_rules true` aktiv ist, werden zusätzlich eingebaute Heuristiken geladen. Die Default-Liste bleibt auf relativ klare Scanner-Ziele und Exploit-Indikatoren begrenzt:
+Wenn `built_in_rules true` aktiv ist, werden zusätzlich eingebaute Heuristiken geladen. Die Default-Liste deckt inzwischen sowohl klassische Scanner-Ziele als auch konservative regex-basierte Pfadregeln ab:
 
 - Pfad-Präfixe wie `/.git`, `/.env`, `/wp-admin`, `/phpmyadmin`, `/cgi-bin`, `/manager/html`, `/vendor/phpunit` oder `/h2-console`
+- generische Dotfile-Pfade wie `/assets/.gitignore`, wobei `/.well-known/*` erreichbar bleibt
+- sensible Dateinamen wie `.env`, `wp-config.php`, `credentials.yml.enc`, `db.sqlite3`, `id_rsa`, `authorized_keys`, `server.php` oder `manage.py`
+- Backup-, Dump-, Key-, Log- und Source-Map-Endungen wie `.sql`, `.dump`, `.bak`, `.log`, `.pem`, `.key` oder `.map`
 - Query-Indikatoren wie `../`, `%2e%2e%2f`, `<script`, `union select`, `${jndi:`, `or 1=1`, `/etc/passwd`, `cmd.exe`, `php://` oder `gopher://`
 - Header-Indikatoren wie `User-Agent: sqlmap`, `nuclei`, `nikto`, `gobuster` oder Rewrite-Header mit `../`
 
-`aggressive_built_in_rules true` ergänzt breitere Pfad- und Query-Treffer wie `/graphql`, `/api/v4`, `/wp-content` oder `exec(`. Das kann für reine Public-Websites sinnvoll sein, sollte bei APIs, WordPress-Frontends oder Admin-Oberflächen aber bewusst getestet werden.
+`aggressive_built_in_rules true` ergänzt breitere Pfad- und Query-Treffer wie `/graphql`, `/api/v4`, `/wp-content` oder `exec(` sowie Dependency-Manifeste wie `package-lock.json` oder `go.mod`, Build-/Konfigurationsdateien wie `Dockerfile`, `tsconfig.json` oder `nuxt.config.ts` und API-Explorer-Endpunkte wie `swagger`, `openapi`, `graphql-playground` oder `graphiql`. Das kann für reine Public-Websites sinnvoll sein, sollte bei APIs, WordPress-Frontends oder Admin-Oberflächen aber bewusst getestet werden.
 
 Treffer werden wie die IP-Blacklist behandelt: Der Request wird still verworfen, bevor Challenge, Cookie, Allowlist oder Upstream ins Spiel kommen.
 

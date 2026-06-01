@@ -121,13 +121,16 @@ If you want to observe behavior first, use `instrumentation_log_only true` toget
 
 The request rules are intentionally coarse and cheap. They are meant to reject obvious scanner targets and primitive exploit strings early. They are not a full WAF and not a replacement for CRS.
 
-If `built_in_rules true` is enabled, additional built-in heuristics are loaded. The default list stays focused on relatively clear scanner targets and exploit indicators:
+If `built_in_rules true` is enabled, additional built-in heuristics are loaded. The default list covers both classic scanner targets and a conservative set of regex-based path rules:
 
 - path prefixes such as `/.git`, `/.env`, `/wp-admin`, `/phpmyadmin`, `/cgi-bin`, `/manager/html`, `/vendor/phpunit`, or `/h2-console`
+- generic dotfile paths such as `/assets/.gitignore` while keeping `/.well-known/*` reachable
+- sensitive filenames such as `.env`, `wp-config.php`, `credentials.yml.enc`, `db.sqlite3`, `id_rsa`, `authorized_keys`, `server.php`, or `manage.py`
+- backup, dump, key, log, and source-map suffixes such as `.sql`, `.dump`, `.bak`, `.log`, `.pem`, `.key`, or `.map`
 - query indicators such as `../`, `%2e%2e%2f`, `<script`, `union select`, `${jndi:`, `or 1=1`, `/etc/passwd`, `cmd.exe`, `php://`, or `gopher://`
 - header indicators such as `User-Agent: sqlmap`, `nuclei`, `nikto`, `gobuster`, or rewrite headers containing `../`
 
-`aggressive_built_in_rules true` adds broader path and query matches such as `/graphql`, `/api/v4`, `/wp-content`, or `exec(`. That can make sense for pure public websites, but it should be tested deliberately for APIs, WordPress frontends, or admin surfaces.
+`aggressive_built_in_rules true` adds broader path and query matches such as `/graphql`, `/api/v4`, `/wp-content`, `exec(`, dependency manifests like `package-lock.json` or `go.mod`, build/config files like `Dockerfile`, `tsconfig.json`, or `nuxt.config.ts`, and API explorer endpoints like `swagger`, `openapi`, `graphql-playground`, or `graphiql`. That can make sense for pure public websites, but it should be tested deliberately for APIs, WordPress frontends, or admin surfaces.
 
 Matches are treated like the IP blacklist: the request is silently dropped before challenge, cookie, allowlist, or upstream handling.
 
