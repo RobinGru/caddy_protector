@@ -182,8 +182,9 @@ var (
 )
 
 type verifyRequest struct {
-	ChallengeToken string `json:"challengeToken"`
-	Nonce          string `json:"nonce"`
+	ChallengeToken  string                `json:"challengeToken"`
+	Nonce           string                `json:"nonce"`
+	Instrumentation *instrumentationProof `json:"instrumentation,omitempty"`
 }
 
 type verifyDecodeInfo struct {
@@ -224,11 +225,12 @@ type geoIPCountryRecord struct {
 }
 
 type challengeTokenClaims struct {
-	Version    int    `json:"v"`
-	Seed       string `json:"seed"`
-	ExpiresAt  int64  `json:"exp"`
-	ReturnPath string `json:"return_to"`
-	Complexity int    `json:"complexity"`
+	Version         int    `json:"v"`
+	Seed            string `json:"seed"`
+	ExpiresAt       int64  `json:"exp"`
+	ReturnPath      string `json:"return_to"`
+	Complexity      int    `json:"complexity"`
+	Instrumentation bool   `json:"instrumentation,omitempty"`
 }
 
 type allowCookieClaims struct {
@@ -310,6 +312,12 @@ type CaddyProtector struct {
 
 	// AggressiveBuiltInRules aktiviert breitere Built-ins mit hoeherem False-Positive-Risiko.
 	AggressiveBuiltInRules *bool `json:"aggressive_built_in_rules,omitempty"`
+
+	// Instrumentation aktiviert einfache Browser-Instrumentation zusätzlich zum PoW.
+	Instrumentation *bool `json:"instrumentation,omitempty"`
+
+	// InstrumentationLogOnly protokolliert Instrumentation-Fehler nur, blockiert aber nicht.
+	InstrumentationLogOnly *bool `json:"instrumentation_log_only,omitempty"`
 
 	// DenyPathPrefixes sperrt Requests mit passenden Pfad-Präfixen.
 	DenyPathPrefixes []string `json:"deny_path_prefix,omitempty"`
@@ -419,6 +427,12 @@ func (bb *CaddyProtector) Provision(ctx caddy.Context) error {
 	if bb.CookieSameSite == "" {
 		bb.CookieSameSite = "Lax"
 	}
+	if bb.Instrumentation == nil {
+		bb.Instrumentation = boolPtr(false)
+	}
+	if bb.InstrumentationLogOnly == nil {
+		bb.InstrumentationLogOnly = boolPtr(false)
+	}
 	if bb.BuiltInRules == nil {
 		bb.BuiltInRules = boolPtr(true)
 	}
@@ -485,6 +499,8 @@ func (bb *CaddyProtector) Provision(ctx caddy.Context) error {
 		zap.Bool("cookie_secure", bb.cookieSecureValue()),
 		zap.Bool("cookie_http_only", bb.cookieHTTPOnlyValue()),
 		zap.String("cookie_same_site", bb.CookieSameSite),
+		zap.Bool("instrumentation", bb.instrumentationEnabled()),
+		zap.Bool("instrumentation_log_only", bb.instrumentationLogOnlyEnabled()),
 		zap.Bool("built_in_rules", bb.builtInRulesEnabled()),
 		zap.Bool("aggressive_built_in_rules", bb.aggressiveBuiltInRulesEnabled()),
 		zap.Strings("whitelist_ips", bb.WhitelistIPs),
@@ -510,6 +526,12 @@ func (bb *CaddyProtector) Validate() error {
 	}
 	if bb.AggressiveBuiltInRules == nil {
 		bb.AggressiveBuiltInRules = boolPtr(false)
+	}
+	if bb.Instrumentation == nil {
+		bb.Instrumentation = boolPtr(false)
+	}
+	if bb.InstrumentationLogOnly == nil {
+		bb.InstrumentationLogOnly = boolPtr(false)
 	}
 	whitelistCountries, err := normalizeCountryCodes("whitelist_country", bb.WhitelistCountries)
 	if err != nil {
@@ -1051,11 +1073,12 @@ func parseSameSiteMode(raw string) (http.SameSite, error) {
 
 func (bb *CaddyProtector) createChallengeToken(seedHex, returnPath string, complexity int, now time.Time) (string, error) {
 	return bb.signValue(challengeTokenClaims{
-		Version:    tokenVersion,
-		Seed:       seedHex,
-		ExpiresAt:  now.Add(time.Duration(bb.ValidFor)).Unix(),
-		ReturnPath: safeReturnPathFrom(returnPath),
-		Complexity: complexity,
+		Version:         tokenVersion,
+		Seed:            seedHex,
+		ExpiresAt:       now.Add(time.Duration(bb.ValidFor)).Unix(),
+		ReturnPath:      safeReturnPathFrom(returnPath),
+		Complexity:      complexity,
+		Instrumentation: bb.instrumentationEnabled(),
 	}, bb.challengeMACKey)
 }
 
@@ -1686,7 +1709,10 @@ func (bb *CaddyProtector) handleVerify(w http.ResponseWriter, r *http.Request) e
 		http.Error(w, "challenge abgelaufen", http.StatusForbidden)
 		return nil
 	}
-	logger = logger.With(zap.Int("complexity", claims.Complexity))
+	logger = logger.With(
+		zap.Int("complexity", claims.Complexity),
+		zap.Bool("instrumentation_required", claims.Instrumentation),
+	)
 	seedBytes, err := hex.DecodeString(claims.Seed)
 	if err != nil || len(seedBytes) != challengeSeedLength {
 		logger.Warn("CaddyProtector-Verify fehlgeschlagen: Seed im Challenge-Token ist ungültig",
@@ -1715,6 +1741,18 @@ func (bb *CaddyProtector) handleVerify(w http.ResponseWriter, r *http.Request) e
 		return nil
 	}
 
+	if claims.Instrumentation {
+		if err := verifyInstrumentation(claims.Seed, req.Instrumentation); err != nil {
+			logger.Warn("CaddyProtector-Verify Instrumentation fehlgeschlagen",
+				zap.Error(err),
+			)
+			if !bb.instrumentationLogOnlyEnabled() {
+				http.Error(w, "browser-pruefung fehlgeschlagen", http.StatusForbidden)
+				return nil
+			}
+		}
+	}
+
 	returnTo := safeReturnPathFrom(claims.ReturnPath)
 	if err := bb.writeAllowCookie(w, now); err != nil {
 		logger.Error("Freigabe-Cookie konnte nicht gesetzt werden", zap.Error(err))
@@ -1724,6 +1762,7 @@ func (bb *CaddyProtector) handleVerify(w http.ResponseWriter, r *http.Request) e
 
 	logger.Info("CaddyProtector-Verify erfolgreich",
 		zap.Int("leading_zero_bits", leadingZeroBits),
+		zap.Bool("instrumentation_verified", claims.Instrumentation && req.Instrumentation != nil),
 		zap.String("return_to", redactPathForLog(returnTo)),
 		zap.Time("allowed_until", now.Add(time.Duration(bb.AllowFor))),
 	)

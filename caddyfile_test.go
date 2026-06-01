@@ -26,6 +26,8 @@ caddy_protector {
 	cookie_same_site Strict
 	built_in_rules false
 	aggressive_built_in_rules true
+	instrumentation true
+	instrumentation_log_only true
 	verify_path /__caddy_protector/verify
 	deny_path_prefix /wp-admin
 	deny_path_prefix /.git
@@ -87,6 +89,12 @@ caddy_protector {
 	}
 	if bb.AggressiveBuiltInRules == nil || !*bb.AggressiveBuiltInRules {
 		t.Fatal("AggressiveBuiltInRules sollte true sein")
+	}
+	if bb.Instrumentation == nil || !*bb.Instrumentation {
+		t.Fatal("Instrumentation sollte true sein")
+	}
+	if bb.InstrumentationLogOnly == nil || !*bb.InstrumentationLogOnly {
+		t.Fatal("InstrumentationLogOnly sollte true sein")
 	}
 	if got := strings.Join(bb.DenyPathPrefixes, ","); got != "/wp-admin,/.git" {
 		t.Fatalf("DenyPathPrefixes = %q", got)
@@ -188,6 +196,40 @@ caddy_protector {
 	}
 	if !strings.Contains(err.Error(), "aggressive_built_in_rules-Wert") {
 		t.Fatalf("Fehler = %v, erwartet Hinweis auf aggressive_built_in_rules", err)
+	}
+}
+
+func TestUnmarshalCaddyfileRejectsBadInstrumentationValue(t *testing.T) {
+	input := `
+caddy_protector {
+	instrumentation kaputt
+}
+`
+
+	var bb CaddyProtector
+	err := bb.UnmarshalCaddyfile(caddyfile.NewTestDispenser(input))
+	if err == nil {
+		t.Fatal("erwarteter Fehler fuer ungueltigen instrumentation-Wert fehlt")
+	}
+	if !strings.Contains(err.Error(), "instrumentation-Wert") {
+		t.Fatalf("Fehler = %v, erwartet Hinweis auf instrumentation", err)
+	}
+}
+
+func TestUnmarshalCaddyfileRejectsBadInstrumentationLogOnlyValue(t *testing.T) {
+	input := `
+caddy_protector {
+	instrumentation_log_only kaputt
+}
+`
+
+	var bb CaddyProtector
+	err := bb.UnmarshalCaddyfile(caddyfile.NewTestDispenser(input))
+	if err == nil {
+		t.Fatal("erwarteter Fehler fuer ungueltigen instrumentation_log_only-Wert fehlt")
+	}
+	if !strings.Contains(err.Error(), "instrumentation_log_only-Wert") {
+		t.Fatalf("Fehler = %v, erwartet Hinweis auf instrumentation_log_only", err)
 	}
 }
 

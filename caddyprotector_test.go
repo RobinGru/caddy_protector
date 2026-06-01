@@ -238,6 +238,24 @@ func TestChallengeTokenRoundTrip(t *testing.T) {
 	}
 }
 
+func TestChallengeTokenCarriesInstrumentationRequirement(t *testing.T) {
+	bb := newTestProtector(t)
+	bb.Instrumentation = boolPtr(true)
+	now := time.Now()
+	token, err := bb.createChallengeToken(strings.Repeat("11", challengeSeedLength), "/protected", 8, now)
+	if err != nil {
+		t.Fatalf("createChallengeToken() error = %v", err)
+	}
+
+	claims, err := bb.verifyChallengeToken(token, now)
+	if err != nil {
+		t.Fatalf("verifyChallengeToken() error = %v", err)
+	}
+	if !claims.Instrumentation {
+		t.Fatal("Instrumentation sollte im Token markiert sein")
+	}
+}
+
 func TestChallengeTokenRejectsTampering(t *testing.T) {
 	bb := newTestProtector(t)
 	token, err := bb.createChallengeToken(strings.Repeat("11", challengeSeedLength), "/protected", 8, time.Now())
@@ -374,6 +392,76 @@ func TestVerifyAcceptsCorrectNonce(t *testing.T) {
 	}
 	if got := res["returnTo"]; got != "/protected?x=1" {
 		t.Fatalf("returnTo = %v", got)
+	}
+}
+
+func TestVerifyRejectsMissingInstrumentationWhenRequired(t *testing.T) {
+	bb := newTestProtector(t)
+	bb.Instrumentation = boolPtr(true)
+	token, claims := newChallengeTokenFor(t, bb, "/protected", 8, time.Now())
+	seedBytes, _ := hex.DecodeString(claims.Seed)
+	rr := httptest.NewRecorder()
+	req := verifyRequestFor(t, token, findNonceHex(t, seedBytes, 8))
+
+	if err := bb.handleVerify(rr, req); err != nil {
+		t.Fatalf("handleVerify() error = %v", err)
+	}
+	if rr.Code != http.StatusForbidden {
+		t.Fatalf("Status = %d, erwartet %d", rr.Code, http.StatusForbidden)
+	}
+}
+
+func TestVerifyAcceptsCorrectNonceWithInstrumentation(t *testing.T) {
+	bb := newTestProtector(t)
+	bb.Instrumentation = boolPtr(true)
+	token, claims := newChallengeTokenFor(t, bb, "/protected?x=1", 8, time.Now())
+	seedBytes, _ := hex.DecodeString(claims.Seed)
+	proof := instrumentationProofForSeed(t, claims.Seed)
+	rr := httptest.NewRecorder()
+	req := verifyRequestForWithInstrumentation(t, token, findNonceHex(t, seedBytes, 8), &proof)
+
+	if err := bb.handleVerify(rr, req); err != nil {
+		t.Fatalf("handleVerify() error = %v", err)
+	}
+	if rr.Code != http.StatusOK {
+		t.Fatalf("Status = %d", rr.Code)
+	}
+}
+
+func TestVerifyRejectsInstrumentationMismatch(t *testing.T) {
+	bb := newTestProtector(t)
+	bb.Instrumentation = boolPtr(true)
+	token, claims := newChallengeTokenFor(t, bb, "/protected", 8, time.Now())
+	seedBytes, _ := hex.DecodeString(claims.Seed)
+	proof := instrumentationProofForSeed(t, claims.Seed)
+	proof.Result = strings.Repeat("0", instrumentationResultHexLen)
+	rr := httptest.NewRecorder()
+	req := verifyRequestForWithInstrumentation(t, token, findNonceHex(t, seedBytes, 8), &proof)
+
+	if err := bb.handleVerify(rr, req); err != nil {
+		t.Fatalf("handleVerify() error = %v", err)
+	}
+	if rr.Code != http.StatusForbidden {
+		t.Fatalf("Status = %d, erwartet %d", rr.Code, http.StatusForbidden)
+	}
+}
+
+func TestVerifyAllowsInstrumentationFailureInLogOnlyMode(t *testing.T) {
+	bb := newTestProtector(t)
+	bb.Instrumentation = boolPtr(true)
+	bb.InstrumentationLogOnly = boolPtr(true)
+	token, claims := newChallengeTokenFor(t, bb, "/protected", 8, time.Now())
+	seedBytes, _ := hex.DecodeString(claims.Seed)
+	proof := instrumentationProofForSeed(t, claims.Seed)
+	proof.Webdriver = true
+	rr := httptest.NewRecorder()
+	req := verifyRequestForWithInstrumentation(t, token, findNonceHex(t, seedBytes, 8), &proof)
+
+	if err := bb.handleVerify(rr, req); err != nil {
+		t.Fatalf("handleVerify() error = %v", err)
+	}
+	if rr.Code != http.StatusOK {
+		t.Fatalf("Status = %d, erwartet %d", rr.Code, http.StatusOK)
 	}
 }
 
@@ -1199,7 +1287,12 @@ func newChallengeTokenFor(t *testing.T, bb *CaddyProtector, returnPath string, c
 
 func verifyRequestFor(t *testing.T, challengeToken, nonceHex string) *http.Request {
 	t.Helper()
-	body, err := json.Marshal(verifyRequest{ChallengeToken: challengeToken, Nonce: nonceHex})
+	return verifyRequestForWithInstrumentation(t, challengeToken, nonceHex, nil)
+}
+
+func verifyRequestForWithInstrumentation(t *testing.T, challengeToken, nonceHex string, proof *instrumentationProof) *http.Request {
+	t.Helper()
+	body, err := json.Marshal(verifyRequest{ChallengeToken: challengeToken, Nonce: nonceHex, Instrumentation: proof})
 	if err != nil {
 		t.Fatalf("json.Marshal() error = %v", err)
 	}
@@ -1230,5 +1323,21 @@ func findNonceHex(t *testing.T, seed []byte, complexity int) string {
 		if countLeadingZeroBits(sum[:]) >= complexity {
 			return hex.EncodeToString(nonce)
 		}
+	}
+}
+
+func instrumentationProofForSeed(t *testing.T, seedHex string) instrumentationProof {
+	t.Helper()
+	result, err := computeInstrumentationResultFromHex(seedHex)
+	if err != nil {
+		t.Fatalf("computeInstrumentationResultFromHex() error = %v", err)
+	}
+	return instrumentationProof{
+		Result:     result,
+		DurationMS: 12,
+		HasDOM:     true,
+		HasCrypto:  true,
+		HasRAF:     true,
+		Webdriver:  false,
 	}
 }

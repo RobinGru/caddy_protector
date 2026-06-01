@@ -119,6 +119,18 @@ func (bb *CaddyProtector) UnmarshalCaddyfile(d *caddyfile.Dispenser) error {
 					return d.Errf("ungueltiger aggressive_built_in_rules-Wert: %v", err)
 				}
 				bb.AggressiveBuiltInRules = &value
+			case "instrumentation":
+				value, err := strconv.ParseBool(arg)
+				if err != nil {
+					return d.Errf("ungueltiger instrumentation-Wert: %v", err)
+				}
+				bb.Instrumentation = &value
+			case "instrumentation_log_only":
+				value, err := strconv.ParseBool(arg)
+				if err != nil {
+					return d.Errf("ungueltiger instrumentation_log_only-Wert: %v", err)
+				}
+				bb.InstrumentationLogOnly = &value
 			case "cookie_same_site":
 				bb.CookieSameSite = arg
 			case "verify_path":

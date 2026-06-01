@@ -19,10 +19,11 @@ The request flow is:
 5. If `complexity` resolves to `0` for a request, the challenge is disabled for that request.
 6. Requests with a valid access cookie are allowed through until `allow_for` expires.
 7. Other clients receive a challenge page with a signed challenge token and browser bundle.
-8. The browser extracts the seed from the challenge token and searches for a `nonce` such that `BLAKE3(seed || nonce)` has enough leading zero bits.
-9. The solution is sent as JSON with `challengeToken` and `nonce` to `verify_path`.
-10. The server first validates the token MAC and token lifetime, then validates the PoW solution.
-11. On success, the server sets a signed `HttpOnly` cookie for `allow_for` minutes.
+8. If `instrumentation true` is enabled, the browser first runs a lightweight DOM-, timing-, and WebCrypto-based instrumentation check derived from the challenge seed.
+9. The browser extracts the seed from the challenge token and searches for a `nonce` such that `BLAKE3(seed || nonce)` has enough leading zero bits.
+10. The solution is sent as JSON with `challengeToken`, `nonce`, and, when enabled, `instrumentation` to `verify_path`.
+11. The server first validates the token MAC and token lifetime, then validates the PoW solution and optional instrumentation result.
+12. On success, the server sets a signed `HttpOnly` cookie for `allow_for` minutes.
 
 ## Features
 
@@ -34,6 +35,7 @@ The request flow is:
 - country filters via GeoIP MMDB with whitelist and blacklist rules
 - periodic refresh for file and URL sources
 - embedded challenge page including a locally built browser bundle
+- optional basic instrumentation challenge using DOM, `requestAnimationFrame`, and WebCrypto probes
 - default CSP header for the challenge page
 
 ## Installation
@@ -65,6 +67,8 @@ Alternatively, the module can be included in an existing custom Caddy build.
 | `cookie_same_site` | `Lax`, `Strict`, or `None` for the access cookie. | `Lax` |
 | `built_in_rules` | Enables simple built-in rules for obvious scanner targets and coarse exploit indicators. | `true` |
 | `aggressive_built_in_rules` | Enables broader built-in rules with a higher false-positive risk, for example for `/graphql`, `/api/v4`, or `/wp-content`. | `false` |
+| `instrumentation` | Enables a basic browser instrumentation challenge in addition to PoW. | `false` |
+| `instrumentation_log_only` | Logs failed instrumentation checks but still accepts a valid PoW. Useful for rollout and tuning. | `false` |
 | `verify_path` | Internal `POST` endpoint for verification. | `/__caddy_protector/verify` |
 | `deny_path_prefix` | Blocks requests with a matching path prefix. Case-insensitive. Can be specified multiple times. | - |
 | `deny_query_substring` | Blocks requests with a matching query substring. Checks both the raw query and a URL-decoded variant. Case-insensitive. Can be specified multiple times. | - |
@@ -92,12 +96,26 @@ Alternatively, the module can be included in an existing custom Caddy build.
 - Exactly one of `secret` or `secret_file` must be set.
 - `cookie_path` must start with `/`.
 - `cookie_same_site` must be `Lax`, `Strict`, or `None`.
-- `built_in_rules` and `aggressive_built_in_rules` accept `true` or `false`.
+- `built_in_rules`, `aggressive_built_in_rules`, `instrumentation`, and `instrumentation_log_only` accept `true` or `false`.
 - `deny_path_prefix`, `deny_query_substring`, and `deny_header_substring` reject empty values.
 - `deny_header_substring` requires exactly two arguments: header name and substring.
 - Substrings with spaces must be quoted in the Caddyfile, for example `deny_query_substring "union select"`.
 - `whitelist_country` and `blacklist_country` expect ISO-3166-1-alpha-2 codes such as `DE` or `RU`.
 - If country rules are used, `country_url` must be set.
+
+### Instrumentation
+
+If `instrumentation true` is enabled, the browser runs a second verification step before PoW verification is submitted. The current basic mode intentionally stays conservative to avoid unnecessary false positives:
+
+- it creates and traverses short DOM trees
+- it appends and reads temporary DOM nodes with attributes and text content
+- it yields through `requestAnimationFrame`
+- it requires `crypto.getRandomValues`
+- it rejects environments that explicitly report `navigator.webdriver === true`
+
+The expected result is derived from the challenge seed, so every request gets a different instrumentation workload without requiring server-side JavaScript code generation.
+
+If you want to observe behavior first, use `instrumentation_log_only true` together with `instrumentation true`.
 
 ### Simple Request Rules
 
@@ -158,6 +176,8 @@ example.com {
     cookie_same_site Lax
     built_in_rules true
     aggressive_built_in_rules false
+    instrumentation true
+    instrumentation_log_only false
     verify_path /__caddy_protector/verify
 
     deny_path_prefix /internal/debug
@@ -228,7 +248,7 @@ npm install
 npm run build
 ```
 
-The generated `dist/challenge.bundle.js` is embedded into the module via `go:embed`; no CDN is required at runtime.
+The generated `dist/challenge.bundle.js` is embedded into the module via `go:embed`; no CDN is required at runtime. The bundle contains both the PoW solver and the optional basic instrumentation runtime.
 
 ## Development
 
