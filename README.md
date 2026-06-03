@@ -135,7 +135,7 @@ example.com {
 
 ## Templates und CSP
 
-Die eingebaute Challenge-Seite nutzt Inline-Styles und JavaScript mit einer pro Response erzeugten Nonce und lädt das Cap-Widget standardmäßig von `<cap_api_url>/assets/widget.js`. Für das WASM-Asset wird zusätzlich `<cap_api_url>/assets/cap_wasm_bg.wasm` an das Widget durchgereicht. Das passt zur Standalone-Assets-Server-Funktion von Cap (`ENABLE_ASSETS_SERVER=true`). Da `cap-widget` zur Laufzeit Inline-Styles setzt, erlaubt der standardmäßig gesetzte CSP-Header für die Challenge-Seite bei `style-src` zusätzlich `'unsafe-inline'`. Challenge- und Verify-Antworten werden zusätzlich mit `Cache-Control: no-store` ausgeliefert, damit keine abgelaufenen Return-States aus Caches wiederverwendet werden.
+Die eingebaute Challenge-Seite nutzt Inline-Styles und JavaScript mit einer pro Response erzeugten Nonce und lädt das Cap-Widget standardmäßig von `<cap_api_url>/assets/widget.js`. Für das WASM-Asset wird zusätzlich `<cap_api_url>/assets/cap_wasm_bg.wasm` an das Widget durchgereicht. Das passt zur Standalone-Assets-Server-Funktion von Cap (`ENABLE_ASSETS_SERVER=true`). Die standardmäßige CSP ist auf self-hosted Cap-Assets zugeschnitten, erlaubt aber weiterhin auch JSDelivr als Fallback/kompatible Quelle. Da `cap-widget` zur Laufzeit Inline-Styles setzt, erlaubt der CSP-Header bei `style-src` zusätzlich `'unsafe-inline'`; für die Browser-seitige WebAssembly-Kompilierung des Widgets wird in `script-src` zusätzlich `'wasm-unsafe-eval'` gesetzt. Challenge- und Verify-Antworten werden zusätzlich mit `Cache-Control: no-store` ausgeliefert, damit keine abgelaufenen Return-States aus Caches wiederverwendet werden.
 
 Wenn ein eigenes Template verwendet wird, sollte es diese Werte verarbeiten:
 

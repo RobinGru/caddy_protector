@@ -737,7 +737,47 @@ func (bb *CaddyProtector) capSiteVerifyURL() string {
 
 func (bb *CaddyProtector) challengePageCSP(cspNonce string) string {
 	capOrigin := strings.TrimRight(bb.CapAPIURL, "/")
-	return fmt.Sprintf("default-src 'none'; script-src 'nonce-%s' https://cdn.jsdelivr.net; style-src 'nonce-%s' 'unsafe-inline'; connect-src 'self' %s https://cdn.jsdelivr.net; img-src 'self' data:; worker-src 'self' blob: https://cdn.jsdelivr.net; child-src 'self' blob:; frame-src 'self' blob:; base-uri 'none'; form-action 'self'; object-src 'none';", cspNonce, cspNonce, capOrigin)
+	jsDelivrOrigin := "https://cdn.jsdelivr.net"
+
+	scriptSrc := strings.Join([]string{
+		"'nonce-" + cspNonce + "'",
+		"'wasm-unsafe-eval'",
+		capOrigin,
+		jsDelivrOrigin,
+	}, " ")
+	styleSrc := strings.Join([]string{
+		"'nonce-" + cspNonce + "'",
+		"'unsafe-inline'",
+	}, " ")
+	connectSrc := strings.Join([]string{
+		"'self'",
+		capOrigin,
+		jsDelivrOrigin,
+	}, " ")
+	workerSrc := strings.Join([]string{
+		"'self'",
+		"blob:",
+		capOrigin,
+		jsDelivrOrigin,
+	}, " ")
+	frameSrc := strings.Join([]string{
+		"'self'",
+		"blob:",
+	}, " ")
+
+	return strings.Join([]string{
+		"default-src 'none'",
+		"script-src " + scriptSrc,
+		"style-src " + styleSrc,
+		"connect-src " + connectSrc,
+		"img-src 'self' data:",
+		"worker-src " + workerSrc,
+		"child-src " + frameSrc,
+		"frame-src " + frameSrc,
+		"base-uri 'none'",
+		"form-action 'self'",
+		"object-src 'none'",
+	}, "; ") + ";"
 }
 
 func setNoStoreHeaders(w http.ResponseWriter) {
