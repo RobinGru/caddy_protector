@@ -16,14 +16,15 @@ Der Ablauf pro Request ist:
 
 1. `POST`-Requests auf `verify_path` werden immer intern verarbeitet und nie an den Upstream weitergereicht.
 2. Einfache Request-Regeln für offensichtliche Scanner-Ziele und grobe Exploit-Indikatoren werden vor allen weiteren Prüfungen ausgewertet.
-3. Blacklist-Einträge werden sofort verworfen; die Verbindung wird ohne reguläre HTTP-Antwort beendet.
-4. Allowlist-Einträge passieren die Middleware direkt.
-5. Requests mit gültigem Freigabe-Cookie dürfen bis zum Ablauf von `allow_for` passieren.
-6. Andere Clients erhalten eine Challenge-Seite mit Cap-Widget.
-7. Der Browser löst die Cap-Challenge gegen `cap_api_url` mit `cap_site_key`.
-8. Das Widget sendet das erzeugte Token zusammen mit einem signierten Return-State an `verify_path`.
-9. Der Server verifiziert das Token über `POST <cap_api_url>/<cap_site_key>/siteverify` mit `cap_secret_key`.
-10. Bei Erfolg setzt der Server ein signiertes `HttpOnly`-Cookie für `allow_for` Minuten und liefert den ursprünglichen Zielpfad zurück.
+3. Country-Regeln werden vor IP-Allowlist und Freigabe-Cookie ausgewertet.
+4. Blacklist-Einträge werden sofort verworfen; die Verbindung wird ohne reguläre HTTP-Antwort beendet.
+5. Allowlist-Einträge passieren die Middleware direkt.
+6. Requests mit gültigem Freigabe-Cookie dürfen bis zum Ablauf von `allow_for` passieren.
+7. Andere Clients erhalten eine nicht cachebare Challenge-Seite mit Cap-Widget.
+8. Der Browser löst die Cap-Challenge gegen `cap_api_url` mit `cap_site_key`.
+9. Das Widget sendet das erzeugte Token zusammen mit einem signierten Return-State an `verify_path`.
+10. Der Server verifiziert das Token über `POST <cap_api_url>/<cap_site_key>/siteverify` mit `cap_secret_key`.
+11. Bei Erfolg setzt der Server ein signiertes `HttpOnly`-Cookie für `allow_for` Minuten und liefert den ursprünglichen Zielpfad zurück.
 
 ## Features
 
@@ -83,12 +84,14 @@ xcaddy build --with github.com/RobinGru/caddy_protector
 
 - Zeitwerte werden als positive ganze Minuten angegeben, zum Beispiel `120` oder `120m`.
 - `verify_path` muss mit `/` beginnen.
-- `cap_api_url` muss eine absolute `http`- oder `https`-URL sein.
+- `cap_api_url` muss eine absolute URL sein und produktiv `https` verwenden. Reines `http` ist nur für `localhost` oder Loopback-Adressen in lokalen Dev-/Test-Setups erlaubt.
 - `cap_site_key` und `cap_secret_key` dürfen nicht leer sein.
 - `cookie_path` muss mit `/` beginnen.
 - `cookie_same_site` muss `Lax`, `Strict` oder `None` sein.
 - `deny_header_substring` erwartet genau zwei Argumente: Header-Name und Teilstring.
 - Wenn Country-Regeln verwendet werden, muss `country_url` gesetzt sein.
+- `whitelist_url`, `blacklist_url` und `country_url` sollten ebenfalls `https` verwenden. Reines `http` ist auch hier nur für `localhost` oder Loopback-Adressen in lokalen Dev-/Test-Setups erlaubt.
+- Country-Regeln haben Vorrang vor IP-Allowlist und bereits gesetzten Freigabe-Cookies.
 
 ## Beispiel
 
@@ -132,7 +135,7 @@ example.com {
 
 ## Templates und CSP
 
-Die eingebaute Challenge-Seite nutzt Inline-Styles und JavaScript mit einer pro Response erzeugten Nonce und lädt das Cap-Widget über JSDelivr.
+Die eingebaute Challenge-Seite nutzt Inline-Styles und JavaScript mit einer pro Response erzeugten Nonce und lädt das Cap-Widget über JSDelivr. Challenge- und Verify-Antworten werden zusätzlich mit `Cache-Control: no-store` ausgeliefert, damit keine abgelaufenen Return-States aus Caches wiederverwendet werden.
 
 Wenn ein eigenes Template verwendet wird, sollte es diese Werte verarbeiten:
 

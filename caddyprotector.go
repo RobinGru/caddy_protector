@@ -382,12 +382,8 @@ func (bb *CaddyProtector) Validate() error {
 	if strings.TrimSpace(bb.CapSecretKey) == "" {
 		return fmt.Errorf("cap_secret_key darf nicht leer sein")
 	}
-	parsedCapURL, err := url.Parse(strings.TrimSpace(bb.CapAPIURL))
-	if err != nil || parsedCapURL.Scheme == "" || parsedCapURL.Host == "" {
-		return fmt.Errorf("cap_api_url muss eine gueltige absolute URL sein")
-	}
-	if parsedCapURL.Scheme != "http" && parsedCapURL.Scheme != "https" {
-		return fmt.Errorf("cap_api_url muss http oder https verwenden")
+	if err := validateRemoteURL("cap_api_url", bb.CapAPIURL); err != nil {
+		return err
 	}
 	secretMaterial := []byte(bb.CapSecretKey)
 	bb.returnStateMACKey = deriveMACKey(returnStateContext, secretMaterial)
@@ -669,6 +665,7 @@ func (bb *CaddyProtector) serveChallenge(w http.ResponseWriter, r *http.Request)
 		"ConfigJSON":      template.JS(string(configJSON)),
 	}
 
+	setNoStoreHeaders(w)
 	w.Header().Set("Content-Type", "text/html; charset=utf-8")
 	w.Header().Set("X-Bot-Barrier", "challenge")
 
@@ -737,6 +734,11 @@ func (bb *CaddyProtector) capSiteVerifyURL() string {
 func (bb *CaddyProtector) challengePageCSP(cspNonce string) string {
 	capOrigin := strings.TrimRight(bb.CapAPIURL, "/")
 	return fmt.Sprintf("default-src 'none'; script-src 'nonce-%s' https://cdn.jsdelivr.net; style-src 'nonce-%s'; connect-src 'self' %s https://cdn.jsdelivr.net; img-src 'self' data:; worker-src 'self' blob: https://cdn.jsdelivr.net; child-src 'self' blob:; frame-src 'self' blob:; base-uri 'none'; form-action 'self'; object-src 'none';", cspNonce, cspNonce, capOrigin)
+}
+
+func setNoStoreHeaders(w http.ResponseWriter) {
+	w.Header().Set("Cache-Control", "no-store")
+	w.Header().Set("Pragma", "no-cache")
 }
 
 func writeBlacklistedResponse(w http.ResponseWriter) {
@@ -941,12 +943,8 @@ func keyedMAC(key, data []byte) ([]byte, error) {
 
 func validateIPListConfig(kind string, inline []string, _ string, rawURL string, refresh caddy.Duration) error {
 	if rawURL != "" {
-		parsedURL, err := url.Parse(rawURL)
-		if err != nil || parsedURL.Scheme == "" || parsedURL.Host == "" {
-			return fmt.Errorf("%s_url muss eine gueltige absolute URL sein", kind)
-		}
-		if parsedURL.Scheme != "http" && parsedURL.Scheme != "https" {
-			return fmt.Errorf("%s_url muss http oder https verwenden", kind)
+		if err := validateRemoteURL(kind+"_url", rawURL); err != nil {
+			return err
 		}
 	}
 	if refresh < 0 {
@@ -962,12 +960,8 @@ func validateIPListConfig(kind string, inline []string, _ string, rawURL string,
 
 func validateCountryConfig(whitelist, blacklist []string, rawURL string, refresh caddy.Duration) error {
 	if rawURL != "" {
-		parsedURL, err := url.Parse(rawURL)
-		if err != nil || parsedURL.Scheme == "" || parsedURL.Host == "" {
-			return fmt.Errorf("country_url muss eine gueltige absolute URL sein")
-		}
-		if parsedURL.Scheme != "http" && parsedURL.Scheme != "https" {
-			return fmt.Errorf("country_url muss http oder https verwenden")
+		if err := validateRemoteURL("country_url", rawURL); err != nil {
+			return err
 		}
 	}
 	if refresh < 0 {
@@ -980,6 +974,34 @@ func validateCountryConfig(whitelist, blacklist []string, rawURL string, refresh
 		return fmt.Errorf("country_url muss gesetzt sein, wenn whitelist_country oder blacklist_country verwendet wird")
 	}
 	return nil
+}
+
+func validateRemoteURL(fieldName, rawURL string) error {
+	parsedURL, err := url.Parse(strings.TrimSpace(rawURL))
+	if err != nil || parsedURL.Scheme == "" || parsedURL.Host == "" {
+		return fmt.Errorf("%s muss eine gueltige absolute URL sein", fieldName)
+	}
+
+	switch parsedURL.Scheme {
+	case "https":
+		return nil
+	case "http":
+		if isLoopbackHost(parsedURL.Hostname()) {
+			return nil
+		}
+		return fmt.Errorf("%s muss https verwenden; http ist nur fuer localhost oder Loopback-Adressen erlaubt", fieldName)
+	default:
+		return fmt.Errorf("%s muss https verwenden; http ist nur fuer localhost oder Loopback-Adressen erlaubt", fieldName)
+	}
+}
+
+func isLoopbackHost(host string) bool {
+	host = strings.TrimSpace(host)
+	if strings.EqualFold(host, "localhost") {
+		return true
+	}
+	ip := net.ParseIP(host)
+	return ip != nil && ip.IsLoopback()
 }
 
 func normalizeCountryCodes(kind string, codes []string) ([]string, error) {
@@ -1374,6 +1396,7 @@ func (bb *CaddyProtector) logIPListLoaded(mode, kind string, ipList *ipAllowlist
 }
 
 func (bb *CaddyProtector) handleVerify(w http.ResponseWriter, r *http.Request) error {
+	setNoStoreHeaders(w)
 	clientIP := getClientIP(r.Context(), r.RemoteAddr)
 	logger := bb.logger.With(
 		zap.String("event", "caddy_protector_verify"),
