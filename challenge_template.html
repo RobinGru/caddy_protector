@@ -226,6 +226,9 @@
         </main>
 
         <script nonce="{{ .CSPNonce }}">
+            window.CAP_SCRIPT_NONCE = "{{ .CSPNonce }}";
+            window.CAP_CSS_NONCE = "{{ .CSPNonce }}";
+            window.CAP_CUSTOM_WASM_URL = "{{ .CapWASMURL }}";
             window.__BOT_BARRIER__ = {{ .ConfigJSON }};
         </script>
         <script nonce="{{ .CSPNonce }}" type="module" src="{{ .CapWidgetScript }}"></script>

@@ -38,17 +38,16 @@ import (
 var defaultHTML string
 
 const (
-	defaultVerifyPath      = "/__caddy_protector/verify"
-	defaultAllowFor        = 1800 * time.Minute
-	defaultCookieName      = "caddy_protector"
-	defaultCapWidgetScript = "https://cdn.jsdelivr.net/npm/cap-widget"
-	maxVerifyBodyBytes     = 4096
-	maxIPListBytes         = 100 << 20
-	maxCountryDBBytes      = 100 << 20
-	tokenVersion           = 1
-	returnStateValidFor    = 15 * time.Minute
-	returnStateContext     = "caddy_protector:return_state:v1"
-	cookieMACContext       = "caddy_protector:cookie_mac:v1"
+	defaultVerifyPath   = "/__caddy_protector/verify"
+	defaultAllowFor     = 1800 * time.Minute
+	defaultCookieName   = "caddy_protector"
+	maxVerifyBodyBytes  = 4096
+	maxIPListBytes      = 100 << 20
+	maxCountryDBBytes   = 100 << 20
+	tokenVersion        = 1
+	returnStateValidFor = 15 * time.Minute
+	returnStateContext  = "caddy_protector:return_state:v1"
+	cookieMACContext    = "caddy_protector:cookie_mac:v1"
 )
 
 type verifyRequest struct {
@@ -660,8 +659,9 @@ func (bb *CaddyProtector) serveChallenge(w http.ResponseWriter, r *http.Request)
 
 	data := map[string]any{
 		"VerifyPath":      bb.VerifyPath,
-		"CapWidgetScript": defaultCapWidgetScript,
+		"CapWidgetScript": bb.capAssetURL("widget.js"),
 		"CapAPIEndpoint":  bb.capAPIEndpoint(),
+		"CapWASMURL":      bb.capAssetURL("cap_wasm_bg.wasm"),
 		"ConfigJSON":      template.JS(string(configJSON)),
 	}
 
@@ -727,13 +727,17 @@ func (bb *CaddyProtector) capAPIEndpoint() string {
 	return strings.TrimRight(bb.CapAPIURL, "/") + "/" + strings.Trim(bb.CapSiteKey, "/") + "/"
 }
 
+func (bb *CaddyProtector) capAssetURL(assetName string) string {
+	return strings.TrimRight(bb.CapAPIURL, "/") + "/assets/" + strings.TrimLeft(assetName, "/")
+}
+
 func (bb *CaddyProtector) capSiteVerifyURL() string {
 	return strings.TrimRight(bb.CapAPIURL, "/") + "/" + strings.Trim(bb.CapSiteKey, "/") + "/siteverify"
 }
 
 func (bb *CaddyProtector) challengePageCSP(cspNonce string) string {
 	capOrigin := strings.TrimRight(bb.CapAPIURL, "/")
-	return fmt.Sprintf("default-src 'none'; script-src 'nonce-%s' https://cdn.jsdelivr.net; style-src 'nonce-%s'; connect-src 'self' %s https://cdn.jsdelivr.net; img-src 'self' data:; worker-src 'self' blob: https://cdn.jsdelivr.net; child-src 'self' blob:; frame-src 'self' blob:; base-uri 'none'; form-action 'self'; object-src 'none';", cspNonce, cspNonce, capOrigin)
+	return fmt.Sprintf("default-src 'none'; script-src 'nonce-%s' https://cdn.jsdelivr.net; style-src 'nonce-%s' 'unsafe-inline'; connect-src 'self' %s https://cdn.jsdelivr.net; img-src 'self' data:; worker-src 'self' blob: https://cdn.jsdelivr.net; child-src 'self' blob:; frame-src 'self' blob:; base-uri 'none'; form-action 'self'; object-src 'none';", cspNonce, cspNonce, capOrigin)
 }
 
 func setNoStoreHeaders(w http.ResponseWriter) {
