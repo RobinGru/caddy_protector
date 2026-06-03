@@ -71,10 +71,6 @@ func (bb *CaddyProtector) UnmarshalCaddyfile(d *caddyfile.Dispenser) error {
 			}
 
 			switch param {
-			case "complexity":
-				return d.Errf("complexity wird nicht mehr unterstuetzt; verwende Cap ueber cap_api_url, cap_site_key und cap_secret_key")
-			case "valid_for":
-				return d.Errf("valid_for wird nicht mehr unterstuetzt; die Challenge-Lebensdauer wird von Cap verwaltet")
 			case "allow_for":
 				duration, err := parseMinutesDuration(arg)
 				if err != nil {
@@ -87,10 +83,6 @@ func (bb *CaddyProtector) UnmarshalCaddyfile(d *caddyfile.Dispenser) error {
 				bb.CapSiteKey = arg
 			case "cap_secret_key":
 				bb.CapSecretKey = arg
-			case "secret":
-				return d.Errf("secret wird nicht mehr unterstuetzt; verwende cap_secret_key")
-			case "secret_file":
-				return d.Errf("secret_file wird nicht mehr unterstuetzt; verwende cap_secret_key")
 			case "cookie_name":
 				bb.CookieName = arg
 			case "cookie_path":
@@ -151,12 +143,6 @@ func (bb *CaddyProtector) UnmarshalCaddyfile(d *caddyfile.Dispenser) error {
 				bb.CountryRefresh = caddy.Duration(duration)
 			case "template":
 				bb.TemplatePath = arg
-			case "max_challenge_attempts":
-				return d.Errf("max_challenge_attempts wird in der stateless Variante nicht mehr unterstuetzt")
-			case "block_for":
-				return d.Errf("block_for wird in der stateless Variante nicht mehr unterstuetzt")
-			case "max_pending_challenges":
-				return d.Errf("max_pending_challenges wird in der stateless Variante nicht mehr unterstuetzt")
 			default:
 				return d.Errf("unbekannte Option: %s", param)
 			}

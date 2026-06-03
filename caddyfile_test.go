@@ -94,20 +94,6 @@ caddy_protector {
 	}
 }
 
-func TestUnmarshalCaddyfileRejectsRemovedChallengeOptions(t *testing.T) {
-	tests := []string{"complexity", "valid_for", "secret", "secret_file"}
-	for _, option := range tests {
-		t.Run(option, func(t *testing.T) {
-			input := "caddy_protector {\n\t" + option + " value\n}\n"
-			var bb CaddyProtector
-			err := bb.UnmarshalCaddyfile(caddyfile.NewTestDispenser(input))
-			if err == nil || !strings.Contains(err.Error(), "nicht mehr unterstuetzt") {
-				t.Fatalf("Fehler = %v", err)
-			}
-		})
-	}
-}
-
 func TestUnmarshalCaddyfileRejectsBadAllowFor(t *testing.T) {
 	input := `
 caddy_protector {
@@ -188,6 +174,15 @@ func TestUnmarshalCaddyfileRejectsUnexpectedArgumentCount(t *testing.T) {
 		if err := bb.UnmarshalCaddyfile(caddyfile.NewTestDispenser(input)); err == nil {
 			t.Fatal("erwarteter Argumentfehler fehlt")
 		}
+	}
+}
+
+func TestUnmarshalCaddyfileRejectsUnknownOption(t *testing.T) {
+	input := "caddy_protector {\n\tunknown_option value\n}\n"
+	var bb CaddyProtector
+	err := bb.UnmarshalCaddyfile(caddyfile.NewTestDispenser(input))
+	if err == nil || !strings.Contains(err.Error(), "unbekannte Option") {
+		t.Fatalf("Fehler = %v", err)
 	}
 }
 

@@ -147,7 +147,7 @@ Das passt zur Standalone-Assets-Server-Funktion von Cap (`ENABLE_ASSETS_SERVER=t
 
 ### Aktuelle Interaktion der eingebauten Seite
 
-Die eingebaute Challenge-Seite zeigt das Widget an und wartet aktuell auf die explizite Interaktion des Browsers bzw. Nutzers mit dem Widget. Sie startet `widget.solve()` nicht selbst automatisch beim Laden der Seite.
+Die eingebaute Challenge-Seite startet die Cap-Prüfung automatisch nach dem Laden der Seite über `widget.solve()`. Ein zusätzlicher Klick auf das Widget ist dafür nicht erforderlich.
 
 ### CSP-Verhalten
 
