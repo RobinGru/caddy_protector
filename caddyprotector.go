@@ -12,7 +12,6 @@ import (
 	"fmt"
 	"html/template"
 	"io"
-	"math/bits"
 	"mime"
 	"net"
 	"net/http"
@@ -21,8 +20,6 @@ import (
 	"net/url"
 	"os"
 	"path"
-	"regexp"
-	"strconv"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -40,160 +37,23 @@ import (
 //go:embed challenge_template.html
 var defaultHTML string
 
-//go:embed tools/challenge-src/dist/challenge.bundle.js
-var embeddedBundle string
-
 const (
-	defaultComplexity     = "18"
-	defaultVerifyPath     = "/__caddy_protector/verify"
-	defaultValidFor       = 120 * time.Minute
-	defaultAllowFor       = 1800 * time.Minute
-	defaultCookieName     = "caddy_protector"
-	maxVerifyBodyBytes    = 4096
-	challengeSeedLength   = 32
-	maxNonceLength        = 64
-	blake3HashBits        = 256
-	maxIPListBytes        = 100 << 20
-	maxCountryDBBytes     = 100 << 20
-	tokenVersion          = 1
-	challengeTokenContext = "caddy_protector:challenge_token:v1"
-	cookieMACContext      = "caddy_protector:cookie_mac:v1"
-)
-
-var (
-	builtInDenyPathPrefixes = []string{
-		"/.env",
-		"/.env.",
-		"/.git",
-		"/.svn",
-		"/.hg",
-		"/.bzr",
-		"/.ds_store",
-		"/.aws",
-		"/.ssh",
-		"/.npmrc",
-		"/.history",
-		"/.well-known/acme-challenge/..",
-		"/_ignition/execute-solution",
-		"/adminer",
-		"/api/jsonws",
-		"/autodiscover",
-		"/boaform",
-		"/cgi-bin",
-		"/console",
-		"/debug/default",
-		"/ews",
-		"/geoserver",
-		"/h2-console",
-		"/hnap1",
-		"/hudson",
-		"/jenkins",
-		"/login.action",
-		"/manager/html",
-		"/nacos",
-		"/owa",
-		"/phpinfo",
-		"/phpmyadmin",
-		"/pma",
-		"/server-status",
-		"/setup.cgi",
-		"/solr",
-		"/struts",
-		"/telescope",
-		"/v2/_catalog",
-		"/vendor/phpunit",
-		"/webdav",
-		"/wp-admin",
-		"/wp-login.php",
-		"/xmlrpc.php",
-	}
-	builtInDenyPathRegexps = []string{
-		`(?:^|/)(?:\.[^/]+)(?:/|$)`,
-		`(?:^|/)(?:database|config|settingss?|settings|credentials|secrets?|local_settings|\.env(?:\..*)?|\.htaccess|\.htpasswd|\.user\.ini|phpinfo\.php|wp-config(?:-sample)?\.php|debug\.log|error_log|id_rsa|id_ed25519|authorized_keys|known_hosts|db\.sqlite3|local\.xml|master\.key|credentials\.ya?ml\.enc|ansible\.cfg|inventory\.ini|artisan|server\.php|manage\.py)(?:/|$)`,
-		`\.(?:sql|sqlite|sqlite3|db|dump|bak|backup|old|orig|save|swp|swo|tmp|temp|tar|tgz|gz|7z|rar|log|pem|key|crt|csr|p12|pfx|jks|keystore|inc|phps|map)(?:/|$)|~$`,
-	}
-	aggressiveBuiltInDenyPathPrefixes = []string{
-		"/actuator",
-		"/api/v4",
-		"/graphql",
-		"/wp-content",
-		"/wp-includes",
-		"/wp-json",
-	}
-	aggressiveBuiltInDenyPathRegexps = []string{
-		`(?:^|/)(?:composer\.(?:json|lock)|package(?:-lock)?\.json|npm-shrinkwrap\.json|yarn\.lock|pnpm-lock\.yaml|bun\.lockb|Pipfile(?:\.lock)?|requirements(?:-.*)?\.txt|pyproject\.toml|poetry\.lock|Gemfile(?:\.lock)?|go\.(?:mod|sum)|Cargo\.(?:toml|lock)|pom\.xml|build\.gradle|gradle\.properties|settings\.gradle|Dockerfile|docker-compose\.ya?ml|compose\.ya?ml|Jenkinsfile|Makefile|\.dockerignore|\.editorconfig|\.npmrc|\.yarnrc(?:\.yml)?|\.pnpmrc|\.bashrc|\.zshrc|\.profile|\.bash_history|\.DS_Store|Thumbs\.db|desktop\.ini|web\.config|appsettings(?:\..*)?\.json|application(?:-.*)?\.(?:properties|ya?ml)|bootstrap\.(?:properties|ya?ml)|logback\.xml|terraform\.tfstate|.*\.tfvars|phpunit\.xml(?:\.dist)?|pytest\.ini|tox\.ini|jest\.config\.(?:js|ts)|vite\.config\.(?:js|ts|mjs|cjs)|webpack\.config\.(?:js|ts)|next\.config\.(?:js|mjs|ts)|nuxt\.config\.(?:js|ts)|tsconfig\.json|jsconfig\.json|swagger|swagger-ui|swagger-ui\.html|swagger\.(?:json|ya?ml)|openapi\.(?:json|ya?ml)|api-docs|graphql-playground|graphiql|console|_profiler|_wdt|debugbar|telescope|horizon|adminer\.php|phpmyadmin|pma|server-status|server-info|nginx_status|metrics)(?:/|$)`,
-	}
-	builtInDenyQuerySubstrings = []string{
-		"../",
-		"..%2f",
-		"%2e%2e%2f",
-		"%252e%252e%252f",
-		"..\\",
-		"%2e%2e%5c",
-		"../../",
-		"<script",
-		"/etc/passwd",
-		"/etc/shadow",
-		"/proc/self/environ",
-		"/win.ini",
-		"boot.ini",
-		"cmd.exe",
-		"powershell",
-		"/bin/sh",
-		"/bin/bash",
-		"<svg",
-		"onerror=",
-		"onload=",
-		"javascript:",
-		"union select",
-		"union all select",
-		"select@@version",
-		"information_schema",
-		"sleep(",
-		"benchmark(",
-		"waitfor delay",
-		"pg_sleep(",
-		"load_file(",
-		"into outfile",
-		"or 1=1",
-		"and 1=1",
-		"%27 or 1=1",
-		"%22 or 1=1",
-		"${jndi:",
-		"jndi:ldap",
-		"%24%7bjndi",
-		"{{7*7}}",
-		"{{config",
-		"runtime.getruntime",
-		"base64_decode(",
-		"shell_exec(",
-		"passthru(",
-		"proc_open(",
-		"php://",
-		"file://",
-		"gopher://",
-		"expect://",
-	}
-	aggressiveBuiltInDenyQuerySubstrings = []string{
-		"exec(",
-	}
-	builtInDenyHeaderSubstrings = []HeaderSubstringRule{
-		{Name: "User-Agent", Needle: "sqlmap"},
-		{Name: "User-Agent", Needle: "nuclei"},
-		{Name: "User-Agent", Needle: "masscan"},
-		{Name: "User-Agent", Needle: "zgrab"},
-		{Name: "User-Agent", Needle: "nikto"},
-		{Name: "User-Agent", Needle: "gobuster"},
-		{Name: "User-Agent", Needle: "dirbuster"},
-		{Name: "X-Original-URL", Needle: "../"},
-		{Name: "X-Rewrite-URL", Needle: "../"},
-	}
+	defaultVerifyPath      = "/__caddy_protector/verify"
+	defaultAllowFor        = 1800 * time.Minute
+	defaultCookieName      = "caddy_protector"
+	defaultCapWidgetScript = "https://cdn.jsdelivr.net/npm/cap-widget"
+	maxVerifyBodyBytes     = 4096
+	maxIPListBytes         = 100 << 20
+	maxCountryDBBytes      = 100 << 20
+	tokenVersion           = 1
+	returnStateValidFor    = 15 * time.Minute
+	returnStateContext     = "caddy_protector:return_state:v1"
+	cookieMACContext       = "caddy_protector:cookie_mac:v1"
 )
 
 type verifyRequest struct {
-	ChallengeToken  string                `json:"challengeToken"`
-	Nonce           string                `json:"nonce"`
-	Instrumentation *instrumentationProof `json:"instrumentation,omitempty"`
+	Token string `json:"token"`
+	State string `json:"state,omitempty"`
 }
 
 type verifyDecodeInfo struct {
@@ -233,13 +93,10 @@ type geoIPCountryRecord struct {
 	} `maxminddb:"country"`
 }
 
-type challengeTokenClaims struct {
-	Version         int    `json:"v"`
-	Seed            string `json:"seed"`
-	ExpiresAt       int64  `json:"exp"`
-	ReturnPath      string `json:"return_to"`
-	Complexity      int    `json:"complexity"`
-	Instrumentation bool   `json:"instrumentation,omitempty"`
+type returnStateClaims struct {
+	Version    int    `json:"v"`
+	ReturnPath string `json:"return_to"`
+	ExpiresAt  int64  `json:"exp"`
 }
 
 type allowCookieClaims struct {
@@ -258,11 +115,6 @@ type compiledStringRule struct {
 	Source string
 }
 
-type compiledRegexRule struct {
-	Pattern *regexp.Regexp
-	Source  string
-}
-
 type compiledHeaderRule struct {
 	Name   string
 	Needle string
@@ -275,16 +127,9 @@ type requestRuleMatch struct {
 	HeaderName string
 }
 
-// CaddyProtector ist ein Caddy-Middleware-Modul, das vor dem Zugriff auf HTTP-Ressourcen
-// das Lösen einer Rechen-Challenge verlangt.
+// CaddyProtector ist ein Caddy-Middleware-Modul, das Requests mit einer vorgeschalteten
+// Cap-Verifikation absichert und nach erfolgreicher Verifikation ein signiertes Freigabe-Cookie setzt.
 type CaddyProtector struct {
-	// Complexity definiert die Anzahl benötigter führender Null-Bits in
-	// BLAKE3(seed || nonce).
-	Complexity string `json:"complexity,omitempty"`
-
-	// ValidFor bestimmt die Gültigkeitsdauer einer offenen Challenge.
-	ValidFor caddy.Duration `json:"valid_for,omitempty"`
-
 	// TemplatePath ist der Pfad zu einem benutzerdefinierten HTML-Template.
 	TemplatePath string `json:"template,omitempty"`
 
@@ -297,11 +142,14 @@ type CaddyProtector struct {
 	// VerifyPath ist der interne POST-Endpunkt für die Verifikation.
 	VerifyPath string `json:"verify_path,omitempty"`
 
-	// Secret ist das Rohmaterial fuer die Ableitung der BLAKE3-Keyed-MAC-Schluessel.
-	Secret string `json:"secret,omitempty"`
+	// CapAPIURL ist die öffentliche Basis-URL der Cap-Instanz.
+	CapAPIURL string `json:"cap_api_url,omitempty"`
 
-	// SecretFile verweist auf eine Datei mit dem Geheimnis fuer die Token-/Cookie-Signatur.
-	SecretFile string `json:"secret_file,omitempty"`
+	// CapSiteKey ist der Site-Key der Cap-Instanz.
+	CapSiteKey string `json:"cap_site_key,omitempty"`
+
+	// CapSecretKey ist der Secret-Key für serverseitige /siteverify-Requests.
+	CapSecretKey string `json:"cap_secret_key,omitempty"`
 
 	// CookieName ist der Name des Freigabe-Cookies.
 	CookieName string `json:"cookie_name,omitempty"`
@@ -320,18 +168,6 @@ type CaddyProtector struct {
 
 	// CookieSameSite steuert das SameSite-Attribut des Freigabe-Cookies.
 	CookieSameSite string `json:"cookie_same_site,omitempty"`
-
-	// BuiltInRules aktiviert einfache eingebaute Scanner-/Exploit-Heuristiken.
-	BuiltInRules *bool `json:"built_in_rules,omitempty"`
-
-	// AggressiveBuiltInRules aktiviert breitere Built-ins mit hoeherem False-Positive-Risiko.
-	AggressiveBuiltInRules *bool `json:"aggressive_built_in_rules,omitempty"`
-
-	// Instrumentation aktiviert einfache Browser-Instrumentation zusätzlich zum PoW.
-	Instrumentation *bool `json:"instrumentation,omitempty"`
-
-	// InstrumentationLogOnly protokolliert Instrumentation-Fehler nur, blockiert aber nicht.
-	InstrumentationLogOnly *bool `json:"instrumentation_log_only,omitempty"`
 
 	// DenyPathPrefixes sperrt Requests mit passenden Pfad-Präfixen.
 	DenyPathPrefixes []string `json:"deny_path_prefix,omitempty"`
@@ -378,30 +214,29 @@ type CaddyProtector struct {
 	// CountryRefresh bestimmt das Refresh-Intervall fuer die Country-MMDB.
 	CountryRefresh caddy.Duration `json:"country_url_refresh,omitempty"`
 
-	challengeTemplate      *template.Template
-	logger                 *zap.Logger
-	allowlist              atomic.Value
-	blacklist              atomic.Value
-	countryDBMu            sync.RWMutex
-	countryDB              *countryDB
-	allowlistStop          chan struct{}
-	allowlistDone          chan struct{}
-	blacklistStop          chan struct{}
-	blacklistDone          chan struct{}
-	countryStop            chan struct{}
-	countryDone            chan struct{}
-	whitelistCountrySet    map[string]struct{}
-	blacklistCountrySet    map[string]struct{}
-	hasCountryRules        bool
-	hasCountryWhitelist    bool
-	testCountryLookup      func(netip.Addr) (string, bool)
-	testCountryLoader      func(context.Context, string) (*countryDB, error)
-	challengeMACKey        []byte
-	cookieMACKey           []byte
-	compiledPathRules      []compiledStringRule
-	compiledPathRegexRules []compiledRegexRule
-	compiledQueryRules     []compiledStringRule
-	compiledHeaderRules    []compiledHeaderRule
+	challengeTemplate   *template.Template
+	logger              *zap.Logger
+	allowlist           atomic.Value
+	blacklist           atomic.Value
+	countryDBMu         sync.RWMutex
+	countryDB           *countryDB
+	allowlistStop       chan struct{}
+	allowlistDone       chan struct{}
+	blacklistStop       chan struct{}
+	blacklistDone       chan struct{}
+	countryStop         chan struct{}
+	countryDone         chan struct{}
+	whitelistCountrySet map[string]struct{}
+	blacklistCountrySet map[string]struct{}
+	hasCountryRules     bool
+	hasCountryWhitelist bool
+	testCountryLookup   func(netip.Addr) (string, bool)
+	testCountryLoader   func(context.Context, string) (*countryDB, error)
+	returnStateMACKey   []byte
+	cookieMACKey        []byte
+	compiledPathRules   []compiledStringRule
+	compiledQueryRules  []compiledStringRule
+	compiledHeaderRules []compiledHeaderRule
 }
 
 func (*CaddyProtector) CaddyModule() caddy.ModuleInfo {
@@ -415,12 +250,6 @@ func (*CaddyProtector) CaddyModule() caddy.ModuleInfo {
 func (bb *CaddyProtector) Provision(ctx caddy.Context) error {
 	bb.logger = ctx.Logger(bb)
 
-	if bb.Complexity == "" {
-		bb.Complexity = defaultComplexity
-	}
-	if bb.ValidFor == 0 {
-		bb.ValidFor = caddy.Duration(defaultValidFor)
-	}
 	if bb.AllowFor == 0 {
 		bb.AllowFor = caddy.Duration(defaultAllowFor)
 	}
@@ -441,18 +270,6 @@ func (bb *CaddyProtector) Provision(ctx caddy.Context) error {
 	}
 	if bb.CookieSameSite == "" {
 		bb.CookieSameSite = "Lax"
-	}
-	if bb.Instrumentation == nil {
-		bb.Instrumentation = boolPtr(false)
-	}
-	if bb.InstrumentationLogOnly == nil {
-		bb.InstrumentationLogOnly = boolPtr(false)
-	}
-	if bb.BuiltInRules == nil {
-		bb.BuiltInRules = boolPtr(true)
-	}
-	if bb.AggressiveBuiltInRules == nil {
-		bb.AggressiveBuiltInRules = boolPtr(false)
 	}
 	if err := bb.Validate(); err != nil {
 		return err
@@ -504,20 +321,16 @@ func (bb *CaddyProtector) Provision(ctx caddy.Context) error {
 	}
 
 	bb.logger.Info("CaddyProtector-Modul erfolgreich initialisiert",
-		zap.String("complexity", bb.Complexity),
-		zap.Duration("valid_for", time.Duration(bb.ValidFor)),
 		zap.Duration("allow_for", time.Duration(bb.AllowFor)),
 		zap.String("verify_path", bb.VerifyPath),
+		zap.String("cap_api_url", bb.CapAPIURL),
+		zap.String("cap_site_key", bb.CapSiteKey),
 		zap.String("cookie_name", bb.CookieName),
 		zap.String("cookie_path", bb.CookiePath),
 		zap.String("cookie_domain", bb.CookieDomain),
 		zap.Bool("cookie_secure", bb.cookieSecureValue()),
 		zap.Bool("cookie_http_only", bb.cookieHTTPOnlyValue()),
 		zap.String("cookie_same_site", bb.CookieSameSite),
-		zap.Bool("instrumentation", bb.instrumentationEnabled()),
-		zap.Bool("instrumentation_log_only", bb.instrumentationLogOnlyEnabled()),
-		zap.Bool("built_in_rules", bb.builtInRulesEnabled()),
-		zap.Bool("aggressive_built_in_rules", bb.aggressiveBuiltInRulesEnabled()),
 		zap.Strings("whitelist_ips", bb.WhitelistIPs),
 		zap.String("whitelist_file", bb.WhitelistFile),
 		zap.String("whitelist_url", bb.WhitelistURL),
@@ -536,18 +349,6 @@ func (bb *CaddyProtector) Provision(ctx caddy.Context) error {
 
 // Validate prüft die Konfiguration.
 func (bb *CaddyProtector) Validate() error {
-	if bb.BuiltInRules == nil {
-		bb.BuiltInRules = boolPtr(true)
-	}
-	if bb.AggressiveBuiltInRules == nil {
-		bb.AggressiveBuiltInRules = boolPtr(false)
-	}
-	if bb.Instrumentation == nil {
-		bb.Instrumentation = boolPtr(false)
-	}
-	if bb.InstrumentationLogOnly == nil {
-		bb.InstrumentationLogOnly = boolPtr(false)
-	}
 	whitelistCountries, err := normalizeCountryCodes("whitelist_country", bb.WhitelistCountries)
 	if err != nil {
 		return err
@@ -572,25 +373,24 @@ func (bb *CaddyProtector) Validate() error {
 	if err := validateCountryConfig(bb.WhitelistCountries, bb.BlacklistCountries, bb.CountryURL, bb.CountryRefresh); err != nil {
 		return err
 	}
-	if bb.Complexity == "" {
-		return fmt.Errorf("complexity muss eine Ganzzahl oder ein Placeholder wie {vars.complexity} sein, gefunden: %s", bb.Complexity)
-	}
-	if bb.Complexity[0] != '{' {
-		if _, err := parseComplexityValue(bb.Complexity); err != nil {
-			return err
-		}
-	}
-	if time.Duration(bb.ValidFor) <= 0 {
-		return fmt.Errorf("valid_for muss größer als 0 sein")
-	}
 	if time.Duration(bb.AllowFor) <= 0 {
 		return fmt.Errorf("allow_for muss größer als 0 sein")
 	}
-	secretMaterial, err := bb.loadSecretMaterial()
-	if err != nil {
-		return err
+	if strings.TrimSpace(bb.CapSiteKey) == "" {
+		return fmt.Errorf("cap_site_key darf nicht leer sein")
 	}
-	bb.challengeMACKey = deriveMACKey(challengeTokenContext, secretMaterial)
+	if strings.TrimSpace(bb.CapSecretKey) == "" {
+		return fmt.Errorf("cap_secret_key darf nicht leer sein")
+	}
+	parsedCapURL, err := url.Parse(strings.TrimSpace(bb.CapAPIURL))
+	if err != nil || parsedCapURL.Scheme == "" || parsedCapURL.Host == "" {
+		return fmt.Errorf("cap_api_url muss eine gueltige absolute URL sein")
+	}
+	if parsedCapURL.Scheme != "http" && parsedCapURL.Scheme != "https" {
+		return fmt.Errorf("cap_api_url muss http oder https verwenden")
+	}
+	secretMaterial := []byte(bb.CapSecretKey)
+	bb.returnStateMACKey = deriveMACKey(returnStateContext, secretMaterial)
 	bb.cookieMACKey = deriveMACKey(cookieMACContext, secretMaterial)
 	if bb.VerifyPath == "" || bb.VerifyPath[0] != '/' {
 		return fmt.Errorf("verify_path muss mit '/' beginnen")
@@ -642,7 +442,6 @@ func (bb *CaddyProtector) ServeHTTP(w http.ResponseWriter, r *http.Request, next
 		return nil
 	}
 
-	complexity := bb.resolveComplexity(r, logger)
 	clientAddr, clientAddrErr := netip.ParseAddr(clientIP)
 	countryCode, countryFound := "", false
 	if bb.hasCountryRules {
@@ -672,47 +471,13 @@ func (bb *CaddyProtector) ServeHTTP(w http.ResponseWriter, r *http.Request, next
 		return next.ServeHTTP(w, r)
 	}
 
-	if complexity == 0 {
-		logger.Info("Complexity ist 0, Challenge wird übersprungen")
-		return next.ServeHTTP(w, r)
-	}
-
 	if bb.hasValidAllowCookie(r) {
 		logger.Debug("Client hat ein gültiges Freigabe-Cookie")
 		return next.ServeHTTP(w, r)
 	}
 
 	logger.Info("Challenge-Seite wird ausgeliefert")
-	return bb.serveChallenge(w, r, complexity)
-}
-
-func parseComplexityValue(value string) (int, error) {
-	complexity, err := strconv.Atoi(value)
-	if err != nil {
-		return 0, fmt.Errorf("complexity muss eine Ganzzahl oder ein Placeholder wie {vars.complexity} sein, gefunden: %s", value)
-	}
-	if complexity < 0 {
-		return 0, fmt.Errorf("complexity muss mindestens 0 sein, gefunden: %d", complexity)
-	}
-	if complexity > blake3HashBits {
-		return 0, fmt.Errorf("complexity darf höchstens %d sein, weil BLAKE3-256 nur %d Hash-Bits liefert, gefunden: %d", blake3HashBits, blake3HashBits, complexity)
-	}
-	return complexity, nil
-}
-
-func (bb *CaddyProtector) resolveComplexity(r *http.Request, logger *zap.Logger) int {
-	complexityStr := bb.Complexity
-	if repl, ok := r.Context().Value(caddy.ReplacerCtxKey).(*caddy.Replacer); ok && repl != nil {
-		complexityStr = repl.ReplaceAll(bb.Complexity, defaultComplexity)
-	}
-
-	complexity, err := parseComplexityValue(complexityStr)
-	if err != nil {
-		logger.Error("Ungültiger Complexity-Wert nach Placeholder-Ersetzung, es wird der Standardwert verwendet", zap.String("complexity", complexityStr), zap.Error(err))
-		complexity, _ = parseComplexityValue(defaultComplexity)
-		return complexity
-	}
-	return complexity
+	return bb.serveChallenge(w, r)
 }
 
 func isJSONContentType(contentType string) bool {
@@ -801,13 +566,9 @@ func normalizeRuleValue(kind, raw string) (string, error) {
 }
 
 func (bb *CaddyProtector) compileRequestRules() error {
-	pathCapacity := len(bb.DenyPathPrefixes) + len(builtInDenyPathPrefixes) + len(aggressiveBuiltInDenyPathPrefixes)
-	pathRegexCapacity := len(builtInDenyPathRegexps) + len(aggressiveBuiltInDenyPathRegexps)
-	queryCapacity := len(bb.DenyQuerySubstrings) + len(builtInDenyQuerySubstrings) + len(aggressiveBuiltInDenyQuerySubstrings)
-	pathRules := make([]compiledStringRule, 0, pathCapacity)
-	pathRegexRules := make([]compiledRegexRule, 0, pathRegexCapacity)
-	queryRules := make([]compiledStringRule, 0, queryCapacity)
-	headerRules := make([]compiledHeaderRule, 0, len(bb.DenyHeaderSubstrings)+len(builtInDenyHeaderSubstrings))
+	pathRules := make([]compiledStringRule, 0, len(bb.DenyPathPrefixes))
+	queryRules := make([]compiledStringRule, 0, len(bb.DenyQuerySubstrings))
+	headerRules := make([]compiledHeaderRule, 0, len(bb.DenyHeaderSubstrings))
 
 	for _, raw := range bb.DenyPathPrefixes {
 		value, err := normalizeRuleValue("deny_path_prefix", raw)
@@ -836,46 +597,7 @@ func (bb *CaddyProtector) compileRequestRules() error {
 		headerRules = append(headerRules, compiledHeaderRule{Name: name, Needle: needle, Source: "config"})
 	}
 
-	if bb.builtInRulesEnabled() {
-		for _, raw := range builtInDenyPathPrefixes {
-			pathRules = append(pathRules, compiledStringRule{Value: raw, Source: "builtin"})
-		}
-		for _, raw := range builtInDenyPathRegexps {
-			pattern, err := regexp.Compile(`(?i)` + raw)
-			if err != nil {
-				return fmt.Errorf("eingebaute path-regexp-Regel ist ungueltig: %w", err)
-			}
-			pathRegexRules = append(pathRegexRules, compiledRegexRule{Pattern: pattern, Source: "builtin"})
-		}
-		for _, raw := range builtInDenyQuerySubstrings {
-			queryRules = append(queryRules, compiledStringRule{Value: raw, Source: "builtin"})
-		}
-		for _, rule := range builtInDenyHeaderSubstrings {
-			headerRules = append(headerRules, compiledHeaderRule{
-				Name:   textproto.CanonicalMIMEHeaderKey(rule.Name),
-				Needle: strings.ToLower(rule.Needle),
-				Source: "builtin",
-			})
-		}
-	}
-	if bb.aggressiveBuiltInRulesEnabled() {
-		for _, raw := range aggressiveBuiltInDenyPathPrefixes {
-			pathRules = append(pathRules, compiledStringRule{Value: raw, Source: "builtin_aggressive"})
-		}
-		for _, raw := range aggressiveBuiltInDenyPathRegexps {
-			pattern, err := regexp.Compile(`(?i)` + raw)
-			if err != nil {
-				return fmt.Errorf("eingebaute aggressive path-regexp-Regel ist ungueltig: %w", err)
-			}
-			pathRegexRules = append(pathRegexRules, compiledRegexRule{Pattern: pattern, Source: "builtin_aggressive"})
-		}
-		for _, raw := range aggressiveBuiltInDenyQuerySubstrings {
-			queryRules = append(queryRules, compiledStringRule{Value: raw, Source: "builtin_aggressive"})
-		}
-	}
-
 	bb.compiledPathRules = pathRules
-	bb.compiledPathRegexRules = pathRegexRules
 	bb.compiledQueryRules = queryRules
 	bb.compiledHeaderRules = headerRules
 	return nil
@@ -894,16 +616,6 @@ func (bb *CaddyProtector) matchRequestRules(r *http.Request) (requestRuleMatch, 
 		for _, value := range pathValues {
 			if strings.HasPrefix(value, rule.Value) {
 				return requestRuleMatch{Source: rule.Source, Type: "path_prefix"}, true
-			}
-		}
-	}
-	for _, rule := range bb.compiledPathRegexRules {
-		for _, value := range pathValues {
-			if strings.HasPrefix(value, "/.well-known/") {
-				continue
-			}
-			if rule.Pattern.MatchString(value) {
-				return requestRuleMatch{Source: rule.Source, Type: "path_regexp"}, true
 			}
 		}
 	}
@@ -932,38 +644,30 @@ func (bb *CaddyProtector) matchRequestRules(r *http.Request) (requestRuleMatch, 
 	return requestRuleMatch{}, false
 }
 
-func (bb *CaddyProtector) serveChallenge(w http.ResponseWriter, r *http.Request, complexity int) error {
-	seed := make([]byte, challengeSeedLength)
-	if _, err := rand.Read(seed); err != nil {
-		bb.logger.Error("Challenge konnte nicht erstellt werden", zap.Error(err))
-		http.Error(w, "Seed-Erzeugung fehlgeschlagen", http.StatusInternalServerError)
-		return nil
-	}
-	seedHex := hex.EncodeToString(seed)
-	challengeToken, err := bb.createChallengeToken(seedHex, bb.getOriginalPath(r), complexity, time.Now())
+func (bb *CaddyProtector) serveChallenge(w http.ResponseWriter, r *http.Request) error {
+	state, err := bb.createReturnState(bb.getOriginalPath(r), time.Now())
 	if err != nil {
-		bb.logger.Error("Challenge-Token konnte nicht erstellt werden", zap.Error(err))
+		bb.logger.Error("Return-State konnte nicht erstellt werden", zap.Error(err))
 		http.Error(w, "Challenge-Seite konnte nicht gerendert werden", http.StatusInternalServerError)
 		return nil
 	}
 
-	data := map[string]any{
-		"Complexity":  complexity,
-		"VerifyPath":  bb.VerifyPath,
-		"ChallengeJS": template.JS(embeddedBundle),
-	}
-
 	configJSON, err := json.Marshal(map[string]any{
-		"challengeToken": challengeToken,
-		"complexity":     complexity,
-		"verifyPath":     bb.VerifyPath,
+		"verifyPath": bb.VerifyPath,
+		"state":      state,
 	})
 	if err != nil {
 		bb.logger.Error("Challenge-Konfiguration konnte nicht serialisiert werden", zap.Error(err))
 		http.Error(w, "Challenge-Seite konnte nicht gerendert werden", http.StatusInternalServerError)
 		return nil
 	}
-	data["ConfigJSON"] = template.JS(string(configJSON))
+
+	data := map[string]any{
+		"VerifyPath":      bb.VerifyPath,
+		"CapWidgetScript": defaultCapWidgetScript,
+		"CapAPIEndpoint":  bb.capAPIEndpoint(),
+		"ConfigJSON":      template.JS(string(configJSON)),
+	}
 
 	w.Header().Set("Content-Type", "text/html; charset=utf-8")
 	w.Header().Set("X-Bot-Barrier", "challenge")
@@ -975,7 +679,7 @@ func (bb *CaddyProtector) serveChallenge(w http.ResponseWriter, r *http.Request,
 			http.Error(w, "Challenge-Seite konnte nicht gerendert werden", http.StatusInternalServerError)
 			return nil
 		}
-		w.Header().Set("Content-Security-Policy", fmt.Sprintf("default-src 'none'; script-src 'nonce-%s'; style-src 'nonce-%s'; connect-src 'self'; img-src 'self'; base-uri 'none'; form-action 'self'; object-src 'none';", cspNonce, cspNonce))
+		w.Header().Set("Content-Security-Policy", bb.challengePageCSP(cspNonce))
 		data["CSPNonce"] = template.HTMLAttr(cspNonce)
 	}
 
@@ -1020,6 +724,19 @@ func generateCSPNonce() (string, error) {
 		return "", err
 	}
 	return hex.EncodeToString(nonceBytes), nil
+}
+
+func (bb *CaddyProtector) capAPIEndpoint() string {
+	return strings.TrimRight(bb.CapAPIURL, "/") + "/" + strings.Trim(bb.CapSiteKey, "/") + "/"
+}
+
+func (bb *CaddyProtector) capSiteVerifyURL() string {
+	return strings.TrimRight(bb.CapAPIURL, "/") + "/" + strings.Trim(bb.CapSiteKey, "/") + "/siteverify"
+}
+
+func (bb *CaddyProtector) challengePageCSP(cspNonce string) string {
+	capOrigin := strings.TrimRight(bb.CapAPIURL, "/")
+	return fmt.Sprintf("default-src 'none'; script-src 'nonce-%s' https://cdn.jsdelivr.net; style-src 'nonce-%s'; connect-src 'self' %s https://cdn.jsdelivr.net; img-src 'self' data:; worker-src 'self' blob: https://cdn.jsdelivr.net; child-src 'self' blob:; frame-src 'self' blob:; base-uri 'none'; form-action 'self'; object-src 'none';", cspNonce, cspNonce, capOrigin)
 }
 
 func writeBlacklistedResponse(w http.ResponseWriter) {
@@ -1073,27 +790,6 @@ func shortValue(value string, maxLen int) string {
 	return value[:maxLen] + "…"
 }
 
-func (bb *CaddyProtector) loadSecretMaterial() ([]byte, error) {
-	if bb.Secret != "" && bb.SecretFile != "" {
-		return nil, fmt.Errorf("secret und secret_file dürfen nicht gleichzeitig gesetzt sein")
-	}
-	if bb.Secret != "" {
-		return []byte(bb.Secret), nil
-	}
-	if bb.SecretFile != "" {
-		content, err := os.ReadFile(bb.SecretFile)
-		if err != nil {
-			return nil, fmt.Errorf("secret_file konnte nicht gelesen werden: %w", err)
-		}
-		content = bytes.TrimSpace(content)
-		if len(content) == 0 {
-			return nil, fmt.Errorf("secret_file darf kein leeres Geheimnis enthalten")
-		}
-		return content, nil
-	}
-	return nil, fmt.Errorf("secret oder secret_file muss gesetzt sein")
-}
-
 func deriveMACKey(context string, secret []byte) []byte {
 	key := make([]byte, 32)
 	blake3.DeriveKey(context, secret, key)
@@ -1113,30 +809,27 @@ func parseSameSiteMode(raw string) (http.SameSite, error) {
 	}
 }
 
-func (bb *CaddyProtector) createChallengeToken(seedHex, returnPath string, complexity int, now time.Time) (string, error) {
-	return bb.signValue(challengeTokenClaims{
-		Version:         tokenVersion,
-		Seed:            seedHex,
-		ExpiresAt:       now.Add(time.Duration(bb.ValidFor)).Unix(),
-		ReturnPath:      safeReturnPathFrom(returnPath),
-		Complexity:      complexity,
-		Instrumentation: bb.instrumentationEnabled(),
-	}, bb.challengeMACKey)
+func (bb *CaddyProtector) createReturnState(returnPath string, now time.Time) (string, error) {
+	return bb.signValue(returnStateClaims{
+		Version:    tokenVersion,
+		ReturnPath: safeReturnPathFrom(returnPath),
+		ExpiresAt:  now.Add(returnStateValidFor).Unix(),
+	}, bb.returnStateMACKey)
 }
 
-func (bb *CaddyProtector) verifyChallengeToken(raw string, now time.Time) (challengeTokenClaims, error) {
-	var claims challengeTokenClaims
-	if err := bb.verifySignedValue(raw, bb.challengeMACKey, &claims); err != nil {
-		return challengeTokenClaims{}, err
+func (bb *CaddyProtector) verifyReturnState(raw string, now time.Time) (returnStateClaims, error) {
+	var claims returnStateClaims
+	if err := bb.verifySignedValue(raw, bb.returnStateMACKey, &claims); err != nil {
+		return returnStateClaims{}, err
 	}
 	if claims.Version != tokenVersion {
-		return challengeTokenClaims{}, fmt.Errorf("unerwartete Token-Version")
+		return returnStateClaims{}, fmt.Errorf("unerwartete Return-State-Version")
 	}
 	if claims.ExpiresAt <= now.Unix() {
-		return challengeTokenClaims{}, fmt.Errorf("challenge_token ist abgelaufen")
+		return returnStateClaims{}, fmt.Errorf("return_state ist abgelaufen")
 	}
 	if claims.ReturnPath == "" || safeReturnPathFrom(claims.ReturnPath) == "/" && claims.ReturnPath != "/" {
-		return challengeTokenClaims{}, fmt.Errorf("challenge_token enthält ungültigen return_to")
+		return returnStateClaims{}, fmt.Errorf("return_state enthaelt ungueltiges return_to")
 	}
 	return claims, nil
 }
@@ -1170,14 +863,6 @@ func (bb *CaddyProtector) writeAllowCookie(w http.ResponseWriter, now time.Time)
 
 func boolPtr(v bool) *bool {
 	return &v
-}
-
-func (bb *CaddyProtector) builtInRulesEnabled() bool {
-	return bb.BuiltInRules != nil && *bb.BuiltInRules
-}
-
-func (bb *CaddyProtector) aggressiveBuiltInRulesEnabled() bool {
-	return bb.AggressiveBuiltInRules != nil && *bb.AggressiveBuiltInRules
 }
 
 func (bb *CaddyProtector) cookieSecureValue() bool {
@@ -1719,83 +1404,44 @@ func (bb *CaddyProtector) handleVerify(w http.ResponseWriter, r *http.Request) e
 		logger.Warn("CaddyProtector-Verify fehlgeschlagen: Request-Body ist kein gültiges JSON",
 			zap.Int("body_length", decodeInfo.BodyLength),
 			zap.String("json_error", decodeInfo.OriginalDecodeError),
-			zap.String("hint", `Der Browser muss echtes JSON wie {"challengeToken":"...","nonce":"..."} mit Content-Type application/json senden.`),
+			zap.String("hint", `Der Browser muss echtes JSON wie {"token":"...","state":"..."} mit Content-Type application/json senden.`),
 			zap.Error(err),
 		)
-		http.Error(w, "ungültige Anfrage", http.StatusBadRequest)
+		http.Error(w, "ungueltige anfrage", http.StatusBadRequest)
 		return nil
 	}
-
-	logger = logger.With(
-		zap.Int("challenge_token_length", len(req.ChallengeToken)),
-		zap.Int("nonce_hex_length", len(req.Nonce)),
-	)
-
-	nonceBytes, err := hex.DecodeString(req.Nonce)
-	if err != nil || len(nonceBytes) == 0 || len(nonceBytes) > maxNonceLength {
-		logger.Warn("CaddyProtector-Verify fehlgeschlagen: Nonce ist ungültig",
-			zap.Int("decoded_nonce_length", len(nonceBytes)),
-			zap.Int("max_nonce_length", maxNonceLength),
-			zap.Error(err),
-		)
-		http.Error(w, "ungültige Nonce", http.StatusBadRequest)
+	if strings.TrimSpace(req.Token) == "" {
+		logger.Warn("CaddyProtector-Verify fehlgeschlagen: Cap-Token fehlt")
+		http.Error(w, "token fehlt", http.StatusBadRequest)
+		return nil
+	}
+	if strings.TrimSpace(req.State) == "" {
+		logger.Warn("CaddyProtector-Verify fehlgeschlagen: Return-State fehlt")
+		http.Error(w, "state fehlt", http.StatusBadRequest)
 		return nil
 	}
 
 	now := time.Now()
-	claims, err := bb.verifyChallengeToken(req.ChallengeToken, now)
+	stateClaims, err := bb.verifyReturnState(req.State, now)
 	if err != nil {
-		logger.Warn("CaddyProtector-Verify fehlgeschlagen: Challenge-Token ist ungültig",
-			zap.Error(err),
-		)
-		http.Error(w, "challenge abgelaufen", http.StatusForbidden)
-		return nil
-	}
-	logger = logger.With(
-		zap.Int("complexity", claims.Complexity),
-		zap.Bool("instrumentation_required", claims.Instrumentation),
-	)
-	seedBytes, err := hex.DecodeString(claims.Seed)
-	if err != nil || len(seedBytes) != challengeSeedLength {
-		logger.Warn("CaddyProtector-Verify fehlgeschlagen: Seed im Challenge-Token ist ungültig",
-			zap.Int("decoded_seed_length", len(seedBytes)),
-			zap.Int("expected_seed_length", challengeSeedLength),
-			zap.Error(err),
-		)
+		logger.Warn("CaddyProtector-Verify fehlgeschlagen: Return-State ist ungültig", zap.Error(err))
 		http.Error(w, "challenge abgelaufen", http.StatusForbidden)
 		return nil
 	}
 
-	input := make([]byte, 0, len(seedBytes)+len(nonceBytes))
-	input = append(input, seedBytes...)
-	input = append(input, nonceBytes...)
-
-	sum := blake3.Sum256(input)
-	leadingZeroBits := countLeadingZeroBits(sum[:])
-	if leadingZeroBits < claims.Complexity {
-		logger.Warn("CaddyProtector-Verify fehlgeschlagen: Proof-of-Work-Lösung erfüllt die Complexity nicht",
-			zap.Int("leading_zero_bits", leadingZeroBits),
-			zap.Int("required_zero_bits", claims.Complexity),
-			zap.String("hash_prefix", hex.EncodeToString(sum[:4])),
-			zap.String("return_path", redactPathForLog(claims.ReturnPath)),
-		)
-		http.Error(w, "ungültige Lösung", http.StatusForbidden)
+	ok, err := bb.verifyCapToken(r.Context(), req.Token)
+	if err != nil {
+		logger.Error("Cap-Siteverify fehlgeschlagen", zap.Error(err))
+		http.Error(w, "cap verification failed", http.StatusBadGateway)
+		return nil
+	}
+	if !ok {
+		logger.Warn("Cap-Siteverify hat das Token abgelehnt")
+		http.Error(w, "ungueltige verifikation", http.StatusForbidden)
 		return nil
 	}
 
-	if claims.Instrumentation {
-		if err := verifyInstrumentation(claims.Seed, req.Instrumentation); err != nil {
-			logger.Warn("CaddyProtector-Verify Instrumentation fehlgeschlagen",
-				zap.Error(err),
-			)
-			if !bb.instrumentationLogOnlyEnabled() {
-				http.Error(w, "browser-pruefung fehlgeschlagen", http.StatusForbidden)
-				return nil
-			}
-		}
-	}
-
-	returnTo := safeReturnPathFrom(claims.ReturnPath)
+	returnTo := safeReturnPathFrom(stateClaims.ReturnPath)
 	if err := bb.writeAllowCookie(w, now); err != nil {
 		logger.Error("Freigabe-Cookie konnte nicht gesetzt werden", zap.Error(err))
 		http.Error(w, "Freigabe-Cookie konnte nicht gesetzt werden", http.StatusInternalServerError)
@@ -1803,8 +1449,6 @@ func (bb *CaddyProtector) handleVerify(w http.ResponseWriter, r *http.Request) e
 	}
 
 	logger.Info("CaddyProtector-Verify erfolgreich",
-		zap.Int("leading_zero_bits", leadingZeroBits),
-		zap.Bool("instrumentation_verified", claims.Instrumentation && req.Instrumentation != nil),
 		zap.String("return_to", redactPathForLog(returnTo)),
 		zap.Time("allowed_until", now.Add(time.Duration(bb.AllowFor))),
 	)
@@ -1816,17 +1460,39 @@ func (bb *CaddyProtector) handleVerify(w http.ResponseWriter, r *http.Request) e
 	})
 }
 
-// countLeadingZeroBits zählt führende Null-Bits in einem Byte-Slice.
-func countLeadingZeroBits(data []byte) int {
-	count := 0
-	for _, b := range data {
-		if b == 0 {
-			count += 8
-			continue
-		}
-		return count + bits.LeadingZeros8(uint8(b))
+func (bb *CaddyProtector) verifyCapToken(ctx context.Context, token string) (bool, error) {
+	payload, err := json.Marshal(map[string]string{
+		"secret":   bb.CapSecretKey,
+		"response": token,
+	})
+	if err != nil {
+		return false, err
 	}
-	return count
+
+	req, err := http.NewRequestWithContext(ctx, http.MethodPost, bb.capSiteVerifyURL(), bytes.NewReader(payload))
+	if err != nil {
+		return false, fmt.Errorf("siteverify request konnte nicht erstellt werden: %w", err)
+	}
+	req.Header.Set("Content-Type", "application/json")
+
+	resp, err := (&http.Client{Timeout: 15 * time.Second}).Do(req)
+	if err != nil {
+		return false, fmt.Errorf("siteverify request fehlgeschlagen: %w", err)
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
+		body, _ := io.ReadAll(io.LimitReader(resp.Body, 1024))
+		return false, fmt.Errorf("siteverify lieferte HTTP %d: %s", resp.StatusCode, shortValue(string(body), 256))
+	}
+
+	var result struct {
+		Success bool `json:"success"`
+	}
+	if err := json.NewDecoder(io.LimitReader(resp.Body, 4096)).Decode(&result); err != nil {
+		return false, fmt.Errorf("siteverify response konnte nicht gelesen werden: %w", err)
+	}
+	return result.Success, nil
 }
 
 // getClientIP liest die Client-IP direkt aus dem Caddy-Kontext.

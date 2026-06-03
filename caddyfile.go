@@ -72,23 +72,25 @@ func (bb *CaddyProtector) UnmarshalCaddyfile(d *caddyfile.Dispenser) error {
 
 			switch param {
 			case "complexity":
-				bb.Complexity = arg
+				return d.Errf("complexity wird nicht mehr unterstuetzt; verwende Cap ueber cap_api_url, cap_site_key und cap_secret_key")
 			case "valid_for":
-				duration, err := parseMinutesDuration(arg)
-				if err != nil {
-					return d.Errf("ungueltige valid_for-Dauer: %v", err)
-				}
-				bb.ValidFor = caddy.Duration(duration)
+				return d.Errf("valid_for wird nicht mehr unterstuetzt; die Challenge-Lebensdauer wird von Cap verwaltet")
 			case "allow_for":
 				duration, err := parseMinutesDuration(arg)
 				if err != nil {
 					return d.Errf("ungueltige allow_for-Dauer: %v", err)
 				}
 				bb.AllowFor = caddy.Duration(duration)
+			case "cap_api_url":
+				bb.CapAPIURL = arg
+			case "cap_site_key":
+				bb.CapSiteKey = arg
+			case "cap_secret_key":
+				bb.CapSecretKey = arg
 			case "secret":
-				bb.Secret = arg
+				return d.Errf("secret wird nicht mehr unterstuetzt; verwende cap_secret_key")
 			case "secret_file":
-				bb.SecretFile = arg
+				return d.Errf("secret_file wird nicht mehr unterstuetzt; verwende cap_secret_key")
 			case "cookie_name":
 				bb.CookieName = arg
 			case "cookie_path":
@@ -107,30 +109,6 @@ func (bb *CaddyProtector) UnmarshalCaddyfile(d *caddyfile.Dispenser) error {
 					return d.Errf("ungueltiger cookie_http_only-Wert: %v", err)
 				}
 				bb.CookieHTTPOnly = &value
-			case "built_in_rules":
-				value, err := strconv.ParseBool(arg)
-				if err != nil {
-					return d.Errf("ungueltiger built_in_rules-Wert: %v", err)
-				}
-				bb.BuiltInRules = &value
-			case "aggressive_built_in_rules":
-				value, err := strconv.ParseBool(arg)
-				if err != nil {
-					return d.Errf("ungueltiger aggressive_built_in_rules-Wert: %v", err)
-				}
-				bb.AggressiveBuiltInRules = &value
-			case "instrumentation":
-				value, err := strconv.ParseBool(arg)
-				if err != nil {
-					return d.Errf("ungueltiger instrumentation-Wert: %v", err)
-				}
-				bb.Instrumentation = &value
-			case "instrumentation_log_only":
-				value, err := strconv.ParseBool(arg)
-				if err != nil {
-					return d.Errf("ungueltiger instrumentation_log_only-Wert: %v", err)
-				}
-				bb.InstrumentationLogOnly = &value
 			case "cookie_same_site":
 				bb.CookieSameSite = arg
 			case "verify_path":

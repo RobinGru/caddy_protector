@@ -8,8 +8,7 @@
         <style nonce="{{ .CSPNonce }}">
             :root {
                 color-scheme: light dark;
-                font-family:
-                    "Aptos", "Segoe UI", "Helvetica Neue", Arial, sans-serif;
+                font-family: "Aptos", "Segoe UI", "Helvetica Neue", Arial, sans-serif;
                 --bg: #f6f7f8;
                 --surface: rgba(255, 255, 255, 0.88);
                 --surface-muted: #eef3f1;
@@ -46,14 +45,8 @@
                 }
             }
 
-            * {
-                box-sizing: border-box;
-            }
-
-            html {
-                font-size: 100%;
-            }
-
+            * { box-sizing: border-box; }
+            html { font-size: 100%; }
             body {
                 min-height: 100vh;
                 margin: 0;
@@ -64,7 +57,6 @@
                 color: var(--text);
                 text-rendering: optimizeLegibility;
             }
-
             .challenge {
                 width: min(100%, 40rem);
                 border: 1px solid var(--border);
@@ -73,20 +65,17 @@
                 box-shadow: var(--shadow);
                 backdrop-filter: blur(18px) saturate(140%);
             }
-
             .content {
                 display: grid;
                 gap: 1.25rem;
                 padding: 1.5rem;
             }
-
             .topline {
                 display: flex;
                 align-items: center;
                 justify-content: space-between;
                 gap: 1rem;
             }
-
             .badge {
                 display: inline-flex;
                 align-items: center;
@@ -95,9 +84,7 @@
                 color: var(--accent-strong);
                 font-size: 0.875rem;
                 font-weight: 700;
-                letter-spacing: 0;
             }
-
             .badge::before {
                 content: "";
                 width: 0.625rem;
@@ -107,22 +94,18 @@
                 box-shadow: 0 0 0 0.35rem var(--accent-soft);
                 flex: 0 0 auto;
             }
-
             .secure-label {
                 color: var(--soft);
                 font-size: 0.875rem;
                 line-height: 1.4;
                 white-space: nowrap;
             }
-
             h1 {
                 margin: 0;
                 font-size: 2.25rem;
                 line-height: 1.12;
-                letter-spacing: 0;
                 text-wrap: balance;
             }
-
             .lead {
                 margin: 0;
                 max-width: 58ch;
@@ -130,7 +113,6 @@
                 font-size: 1rem;
                 line-height: 1.65;
             }
-
             .status-card {
                 display: grid;
                 gap: 1rem;
@@ -139,46 +121,6 @@
                 border-radius: var(--radius);
                 background: var(--surface-muted);
             }
-
-            .status-row {
-                display: grid;
-                grid-template-columns: auto 1fr;
-                gap: 0.9rem;
-                align-items: center;
-            }
-
-            .spinner {
-                position: relative;
-                width: 3rem;
-                height: 3rem;
-                border: 0.25rem solid var(--accent-soft);
-                border-top-color: var(--accent);
-                border-radius: 50%;
-                animation: spin 0.9s linear infinite;
-            }
-
-            .spinner::after {
-                content: "";
-                position: absolute;
-                inset: 0.55rem;
-                border-radius: inherit;
-                border: 1px solid var(--border);
-                background: var(--surface);
-            }
-
-            .status-copy {
-                display: grid;
-                gap: 0.25rem;
-                min-width: 0;
-            }
-
-            .status-heading {
-                margin: 0;
-                font-size: 1.125rem;
-                font-weight: 800;
-                line-height: 1.25;
-            }
-
             .status {
                 min-height: 1.5rem;
                 color: var(--accent-strong);
@@ -186,29 +128,11 @@
                 font-weight: 700;
                 line-height: 1.5;
             }
-
-            .meter {
-                position: relative;
-                height: 0.5rem;
-                overflow: hidden;
-                border-radius: 999px;
-                background: rgba(127, 127, 127, 0.18);
+            .cap-wrap {
+                display: flex;
+                justify-content: center;
+                padding: 0.5rem 0 0;
             }
-
-            .meter::before {
-                content: "";
-                position: absolute;
-                inset: 0 auto 0 0;
-                width: 42%;
-                border-radius: inherit;
-                background: linear-gradient(
-                    90deg,
-                    var(--accent),
-                    var(--warning)
-                );
-                animation: meter 1.5s ease-in-out infinite;
-            }
-
             .trust-list {
                 display: grid;
                 gap: 0.65rem;
@@ -219,20 +143,17 @@
                 font-size: 0.95rem;
                 line-height: 1.5;
             }
-
             .trust-list li {
                 display: grid;
                 grid-template-columns: 1.15rem 1fr;
                 gap: 0.45rem;
                 align-items: start;
             }
-
             .trust-list li::before {
                 content: "✓";
                 color: var(--accent-strong);
                 font-weight: 800;
             }
-
             .help {
                 border-top: 1px solid var(--border);
                 padding-top: 1rem;
@@ -240,92 +161,21 @@
                 font-size: 0.95rem;
                 line-height: 1.6;
             }
-
             .help-title {
                 margin: 0 0 0.45rem;
                 color: var(--text);
                 font-size: 0.95rem;
                 font-weight: 700;
-                line-height: 1.4;
             }
-
-            .help p {
-                margin: 0;
-                max-width: 58ch;
-            }
-
-            :focus-visible {
-                outline: none;
-                box-shadow: var(--focus);
-            }
-
-            @keyframes spin {
-                to {
-                    transform: rotate(360deg);
-                }
-            }
-
-            @keyframes meter {
-                0% {
-                    transform: translateX(-105%);
-                }
-
-                50% {
-                    transform: translateX(85%);
-                }
-
-                100% {
-                    transform: translateX(245%);
-                }
-            }
-
-            @media (min-width: 42rem) {
-                .content {
-                    padding: 2rem;
-                }
-            }
-
+            .help p { margin: 0; max-width: 58ch; }
+            :focus-visible { outline: none; box-shadow: var(--focus); }
+            @media (min-width: 42rem) { .content { padding: 2rem; } }
             @media (max-width: 34rem) {
-                body {
-                    align-items: start;
-                }
-
-                .content {
-                    padding: 1.15rem;
-                }
-
-                .topline {
-                    align-items: flex-start;
-                    flex-direction: column;
-                    gap: 0.4rem;
-                }
-
-                .secure-label {
-                    white-space: normal;
-                }
-
-                h1 {
-                    font-size: 1.75rem;
-                }
-
-                .status-row {
-                    grid-template-columns: 1fr;
-                }
-            }
-
-            @media (prefers-reduced-motion: reduce) {
-                *,
-                *::before,
-                *::after {
-                    animation-duration: 0.01ms !important;
-                    animation-iteration-count: 1 !important;
-                    transition-duration: 0.01ms !important;
-                    scroll-behavior: auto !important;
-                }
-
-                .meter::before {
-                    transform: none;
-                }
+                body { align-items: start; }
+                .content { padding: 1.15rem; }
+                .topline { align-items: flex-start; flex-direction: column; gap: 0.4rem; }
+                .secure-label { white-space: normal; }
+                h1 { font-size: 1.75rem; }
             }
         </style>
     </head>
@@ -334,58 +184,43 @@
             <div class="content">
                 <div class="topline">
                     <div class="badge">Sicherheitscheck</div>
-                    <div class="secure-label">Automatische Prüfung</div>
+                    <div class="secure-label">Cap-Verifikation</div>
                 </div>
 
                 <header>
                     <h1 id="page-title">Einen Moment bitte.</h1>
                     <p class="lead">
-                        Ihr Browser wird kurz geprüft, bevor die Seite geladen
-                        wird. Das schützt vor automatisierten Zugriffen und
-                        benötigt keine Eingabe von Ihnen.
+                        Ihr Browser wird kurz geprüft, bevor die Seite geladen wird.
+                        Das schützt vor automatisierten Zugriffen und benötigt keine
+                        manuelle Aufgabe.
                     </p>
                 </header>
 
                 <section class="status-card" aria-labelledby="progress-heading">
-                    <div class="status-row">
-                        <div class="spinner" aria-hidden="true"></div>
-                        <div class="status-copy">
-                            <h2 class="status-heading" id="progress-heading">
-                                Prüfung läuft
-                            </h2>
-                            <div
-                                class="status"
-                                id="status"
-                                role="status"
-                                aria-live="polite"
-                                aria-atomic="true"
-                            >
-                                Prüfung wird vorbereitet...
-                            </div>
-                        </div>
+                    <h2 class="help-title" id="progress-heading">Prüfung läuft</h2>
+                    <div id="status" class="status" role="status" aria-live="polite" aria-atomic="true">
+                        Prüfung wird vorbereitet...
                     </div>
-                    <div class="meter" aria-hidden="true"></div>
+                    <div class="cap-wrap">
+                        <cap-widget
+                            id="cap-widget"
+                            data-cap-api-endpoint="{{ .CapAPIEndpoint }}"
+                            data-cap-i18n-initial-state="Browser prüfen"
+                            data-cap-i18n-verifying-label="Prüfung läuft..."
+                            data-cap-i18n-solved-label="Prüfung erfolgreich"
+                            data-cap-i18n-error-label="Fehler"
+                        ></cap-widget>
+                    </div>
                 </section>
 
                 <ul class="trust-list" aria-label="Hinweise zur Prüfung">
-                    <li>
-                        Die Berechnung und Browser-Prüfung erfolgen lokal im
-                        Browser.
-                    </li>
-                    <li>
-                        Nach erfolgreicher Prüfung werden Sie automatisch
-                        weitergeleitet.
-                    </li>
+                    <li>Die Verifikation wird über Ihre Cap-Instanz ausgeführt.</li>
+                    <li>Nach erfolgreicher Prüfung werden Sie automatisch weitergeleitet.</li>
                 </ul>
 
                 <section class="help" aria-labelledby="help-heading">
-                    <h2 class="help-title" id="help-heading">
-                        Falls es länger dauert
-                    </h2>
-                    <p>
-                        Laden Sie die Seite neu, wenn die Prüfung nicht
-                        abgeschlossen wird oder eine Fehlermeldung erscheint.
-                    </p>
+                    <h2 class="help-title" id="help-heading">Falls es länger dauert</h2>
+                    <p>Laden Sie die Seite neu, wenn die Prüfung nicht abgeschlossen wird oder eine Fehlermeldung erscheint.</p>
                 </section>
             </div>
         </main>
@@ -393,18 +228,43 @@
         <script nonce="{{ .CSPNonce }}">
             window.__BOT_BARRIER__ = {{ .ConfigJSON }};
         </script>
-        <script nonce="{{ .CSPNonce }}">
-            {{ .ChallengeJS }}
-        </script>
-        <script nonce="{{ .CSPNonce }}">
-            CaddyProtector.solveChallenge(
-                window.__BOT_BARRIER__,
-                document.getElementById("status"),
-            ).catch(function (err) {
-                document.getElementById("status").textContent =
-                    "Die Prüfung ist fehlgeschlagen. Bitte laden Sie die Seite neu.";
-                console.error(err);
+        <script nonce="{{ .CSPNonce }}" type="module" src="{{ .CapWidgetScript }}"></script>
+        <script nonce="{{ .CSPNonce }}" type="module">
+            const statusEl = document.getElementById("status");
+            const widget = document.getElementById("cap-widget");
+            const config = window.__BOT_BARRIER__;
+
+            widget.addEventListener("progress", (event) => {
+                statusEl.textContent = `Prüfung läuft... ${event.detail.progress}%`;
             });
+
+            widget.addEventListener("error", (event) => {
+                statusEl.textContent = event.detail.message || "Die Prüfung ist fehlgeschlagen. Bitte laden Sie die Seite neu.";
+            });
+
+            widget.addEventListener("solve", async (event) => {
+                statusEl.textContent = "Verifikation wird abgeschlossen...";
+                try {
+                    const response = await fetch(config.verifyPath, {
+                        method: "POST",
+                        headers: { "Content-Type": "application/json" },
+                        body: JSON.stringify({ token: event.detail.token, state: config.state }),
+                    });
+
+                    const payload = await response.json().catch(() => ({}));
+                    if (!response.ok || !payload.ok || !payload.returnTo) {
+                        throw new Error("Verifikation fehlgeschlagen");
+                    }
+
+                    statusEl.textContent = "Prüfung erfolgreich. Weiterleitung...";
+                    window.location.replace(payload.returnTo);
+                } catch (error) {
+                    statusEl.textContent = "Die Prüfung ist fehlgeschlagen. Bitte laden Sie die Seite neu.";
+                    console.error(error);
+                }
+            });
+
+            statusEl.textContent = "Bitte bestätigen Sie die Prüfung.";
         </script>
     </body>
 </html>
