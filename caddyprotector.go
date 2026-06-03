@@ -741,6 +741,7 @@ func (bb *CaddyProtector) challengePageCSP(cspNonce string) string {
 
 	scriptSrc := strings.Join([]string{
 		"'nonce-" + cspNonce + "'",
+		"'unsafe-eval'",
 		"'wasm-unsafe-eval'",
 		capOrigin,
 		jsDelivrOrigin,

@@ -1,5 +1,3 @@
-[English](README.md)
-
 # Caddy Protector
 
 `caddy_protector` ist ein HTTP-Middleware-Modul für Caddy. Es schützt Upstreams mit einer Cap-basierten Browser-Verifikation und gibt Clients nach erfolgreicher Prüfung für eine konfigurierbare Zeit frei.
@@ -21,10 +19,11 @@ Der Ablauf pro Request ist:
 5. Allowlist-Einträge passieren die Middleware direkt.
 6. Requests mit gültigem Freigabe-Cookie dürfen bis zum Ablauf von `allow_for` passieren.
 7. Andere Clients erhalten eine nicht cachebare Challenge-Seite mit Cap-Widget.
-8. Der Browser löst die Cap-Challenge gegen `cap_api_url` mit `cap_site_key`.
-9. Das Widget sendet das erzeugte Token zusammen mit einem signierten Return-State an `verify_path`.
-10. Der Server verifiziert das Token über `POST <cap_api_url>/<cap_site_key>/siteverify` mit `cap_secret_key`.
-11. Bei Erfolg setzt der Server ein signiertes `HttpOnly`-Cookie für `allow_for` Minuten und liefert den ursprünglichen Zielpfad zurück.
+8. Die eingebaute Challenge-Seite lädt das Widget standardmäßig von `<cap_api_url>/assets/widget.js` und das WASM von `<cap_api_url>/assets/cap_wasm_bg.wasm`.
+9. Der Browser löst die Cap-Challenge gegen `cap_api_url` mit `cap_site_key`.
+10. Das Widget sendet das erzeugte Token zusammen mit einem signierten Return-State an `verify_path`.
+11. Der Server verifiziert das Token über `POST <cap_api_url>/<cap_site_key>/siteverify` mit `cap_secret_key`.
+12. Bei Erfolg setzt der Server ein signiertes `HttpOnly`-Cookie für `allow_for` Minuten und liefert den ursprünglichen Zielpfad zurück.
 
 ## Features
 
@@ -135,13 +134,39 @@ example.com {
 
 ## Templates und CSP
 
-Die eingebaute Challenge-Seite nutzt Inline-Styles und JavaScript mit einer pro Response erzeugten Nonce und lädt das Cap-Widget standardmäßig von `<cap_api_url>/assets/widget.js`. Für das WASM-Asset wird zusätzlich `<cap_api_url>/assets/cap_wasm_bg.wasm` an das Widget durchgereicht. Das passt zur Standalone-Assets-Server-Funktion von Cap (`ENABLE_ASSETS_SERVER=true`). Die standardmäßige CSP ist auf self-hosted Cap-Assets zugeschnitten, erlaubt aber weiterhin auch JSDelivr als Fallback/kompatible Quelle. Da `cap-widget` zur Laufzeit Inline-Styles setzt, erlaubt der CSP-Header bei `style-src` zusätzlich `'unsafe-inline'`; für die Browser-seitige WebAssembly-Kompilierung des Widgets wird in `script-src` zusätzlich `'wasm-unsafe-eval'` gesetzt. Challenge- und Verify-Antworten werden zusätzlich mit `Cache-Control: no-store` ausgeliefert, damit keine abgelaufenen Return-States aus Caches wiederverwendet werden.
+Die eingebaute Challenge-Seite nutzt Inline-Styles und JavaScript mit einer pro Response erzeugten Nonce.
+
+### Standard-Assets
+
+Standardmäßig lädt die Challenge-Seite:
+
+- das Widget von `<cap_api_url>/assets/widget.js`
+- das WASM-Asset von `<cap_api_url>/assets/cap_wasm_bg.wasm`
+
+Das passt zur Standalone-Assets-Server-Funktion von Cap (`ENABLE_ASSETS_SERVER=true`). Zusätzlich bleibt `https://cdn.jsdelivr.net` in der CSP erlaubt, weil das aktuelle Widget je nach Browser oder Fallback-Pfad weitere Assets von dort laden kann.
+
+### Aktuelle Interaktion der eingebauten Seite
+
+Die eingebaute Challenge-Seite zeigt das Widget an und wartet aktuell auf die explizite Interaktion des Browsers bzw. Nutzers mit dem Widget. Sie startet `widget.solve()` nicht selbst automatisch beim Laden der Seite.
+
+### CSP-Verhalten
+
+Die standardmäßige CSP ist auf self-hosted Cap-Assets zugeschnitten und erlaubt zusätzlich die Quellen, die das aktuelle `cap-widget` praktisch benötigt:
+
+- `script-src` erlaubt die pro Response erzeugte Nonce, `cap_api_url`, `https://cdn.jsdelivr.net`, `'wasm-unsafe-eval'` für die WebAssembly-Kompilierung und zusätzlich `'unsafe-eval'`, weil das aktuelle Widget `new Function(...)` enthält.
+- `style-src` erlaubt die Nonce und zusätzlich `'unsafe-inline'`, weil `cap-widget` zur Laufzeit Inline-Styles setzt.
+- `connect-src` erlaubt `'self'`, `cap_api_url` und `https://cdn.jsdelivr.net`.
+- `worker-src` erlaubt `'self'`, `blob:`, `cap_api_url` und `https://cdn.jsdelivr.net`.
+- `frame-src` und `child-src` erlauben `'self'` und `blob:`.
+
+Challenge- und Verify-Antworten werden zusätzlich mit `Cache-Control: no-store` ausgeliefert, damit keine abgelaufenen Return-States aus Caches wiederverwendet werden.
 
 Wenn ein eigenes Template verwendet wird, sollte es diese Werte verarbeiten:
 
 - `.VerifyPath`
 - `.CapWidgetScript`
 - `.CapAPIEndpoint`
+- `.CapWASMURL`
 - `.ConfigJSON`
 - `.CSPNonce`
 
