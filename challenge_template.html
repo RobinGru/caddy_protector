@@ -8,8 +8,7 @@
         <style nonce="{{ .CSPNonce }}">
             :root {
                 color-scheme: light dark;
-                font-family:
-                    "Aptos", "Segoe UI", "Helvetica Neue", Arial, sans-serif;
+                font-family: "Aptos", "Segoe UI", "Helvetica Neue", Arial, sans-serif;
                 --bg: #f6f7f8;
                 --surface: rgba(255, 255, 255, 0.88);
                 --surface-muted: #eef3f1;
@@ -46,14 +45,8 @@
                 }
             }
 
-            * {
-                box-sizing: border-box;
-            }
-
-            html {
-                font-size: 100%;
-            }
-
+            * { box-sizing: border-box; }
+            html { font-size: 100%; }
             body {
                 min-height: 100vh;
                 margin: 0;
@@ -64,40 +57,34 @@
                 color: var(--text);
                 text-rendering: optimizeLegibility;
             }
-
             .challenge {
-                width: min(100%, 40rem);
+                width: min(100%, 37rem);
                 border: 1px solid var(--border);
                 border-radius: var(--radius);
                 background: var(--surface);
                 box-shadow: var(--shadow);
                 backdrop-filter: blur(18px) saturate(140%);
             }
-
             .content {
                 display: grid;
-                gap: 1.25rem;
-                padding: 1.5rem;
+                gap: 0.9rem;
+                padding: 1.1rem;
             }
-
             .topline {
                 display: flex;
                 align-items: center;
                 justify-content: space-between;
-                gap: 1rem;
+                gap: 0.75rem;
             }
-
             .badge {
                 display: inline-flex;
                 align-items: center;
-                gap: 0.55rem;
-                min-height: 2rem;
+                gap: 0.45rem;
+                min-height: 1.7rem;
                 color: var(--accent-strong);
-                font-size: 0.875rem;
+                font-size: 0.82rem;
                 font-weight: 700;
-                letter-spacing: 0;
             }
-
             .badge::before {
                 content: "";
                 width: 0.625rem;
@@ -107,225 +94,166 @@
                 box-shadow: 0 0 0 0.35rem var(--accent-soft);
                 flex: 0 0 auto;
             }
-
             .secure-label {
                 color: var(--soft);
-                font-size: 0.875rem;
-                line-height: 1.4;
+                font-size: 0.82rem;
+                line-height: 1.35;
                 white-space: nowrap;
             }
-
             h1 {
                 margin: 0;
-                font-size: 2.25rem;
-                line-height: 1.12;
-                letter-spacing: 0;
+                font-size: 1.95rem;
+                line-height: 1.08;
                 text-wrap: balance;
             }
-
             .lead {
-                margin: 0;
-                max-width: 58ch;
+                margin: 0.15rem 0 0;
+                max-width: 54ch;
                 color: var(--muted);
-                font-size: 1rem;
-                line-height: 1.65;
+                font-size: 0.94rem;
+                line-height: 1.5;
             }
-
             .status-card {
                 display: grid;
-                gap: 1rem;
-                padding: 1rem;
+                gap: 0.75rem;
+                padding: 0.85rem;
                 border: 1px solid var(--border-strong);
                 border-radius: var(--radius);
                 background: var(--surface-muted);
             }
-
-            .status-row {
-                display: grid;
-                grid-template-columns: auto 1fr;
-                gap: 0.9rem;
-                align-items: center;
-            }
-
-            .spinner {
-                position: relative;
-                width: 3rem;
-                height: 3rem;
-                border: 0.25rem solid var(--accent-soft);
-                border-top-color: var(--accent);
-                border-radius: 50%;
-                animation: spin 0.9s linear infinite;
-            }
-
-            .spinner::after {
-                content: "";
-                position: absolute;
-                inset: 0.55rem;
-                border-radius: inherit;
-                border: 1px solid var(--border);
-                background: var(--surface);
-            }
-
-            .status-copy {
-                display: grid;
-                gap: 0.25rem;
-                min-width: 0;
-            }
-
-            .status-heading {
-                margin: 0;
-                font-size: 1.125rem;
-                font-weight: 800;
-                line-height: 1.25;
-            }
-
             .status {
-                min-height: 1.5rem;
+                min-height: 1.3rem;
                 color: var(--accent-strong);
-                font-size: 0.98rem;
+                font-size: 0.92rem;
                 font-weight: 700;
-                line-height: 1.5;
+                line-height: 1.4;
             }
-
-            .meter {
-                position: relative;
-                height: 0.5rem;
-                overflow: hidden;
-                border-radius: 999px;
-                background: rgba(127, 127, 127, 0.18);
+            .cap-wrap {
+                display: flex;
+                justify-content: center;
+                padding: 0.2rem 0 0;
             }
-
-            .meter::before {
-                content: "";
-                position: absolute;
-                inset: 0 auto 0 0;
-                width: 42%;
-                border-radius: inherit;
-                background: linear-gradient(
-                    90deg,
-                    var(--accent),
-                    var(--warning)
-                );
-                animation: meter 1.5s ease-in-out infinite;
-            }
-
             .trust-list {
                 display: grid;
-                gap: 0.65rem;
+                gap: 0.4rem;
                 margin: 0;
                 padding: 0;
                 list-style: none;
                 color: var(--muted);
-                font-size: 0.95rem;
-                line-height: 1.5;
+                font-size: 0.88rem;
+                line-height: 1.4;
             }
-
             .trust-list li {
                 display: grid;
-                grid-template-columns: 1.15rem 1fr;
-                gap: 0.45rem;
+                grid-template-columns: 1rem 1fr;
+                gap: 0.35rem;
                 align-items: start;
             }
-
             .trust-list li::before {
                 content: "✓";
                 color: var(--accent-strong);
                 font-weight: 800;
             }
-
-            .help {
-                border-top: 1px solid var(--border);
-                padding-top: 1rem;
-                color: var(--muted);
-                font-size: 0.95rem;
-                line-height: 1.6;
+            .info {
+                display: grid;
+                gap: 0.75rem;
+                padding: 0.85rem;
+                border: 1px solid var(--border);
+                border-radius: var(--radius);
+                background: color-mix(in srgb, var(--surface-muted) 55%, transparent);
             }
-
-            .help-title {
-                margin: 0 0 0.45rem;
-                color: var(--text);
-                font-size: 0.95rem;
+            .info-header {
+                display: grid;
+                gap: 0.3rem;
+            }
+            .eyebrow {
+                color: var(--accent-strong);
+                font-size: 0.74rem;
                 font-weight: 700;
+                letter-spacing: 0.02em;
+                text-transform: uppercase;
+            }
+            .info-title {
+                margin: 0;
+                font-size: 0.98rem;
+                line-height: 1.3;
+            }
+            .info-text {
+                margin: 0;
+                color: var(--muted);
+                font-size: 0.88rem;
+                line-height: 1.45;
+            }
+            .feature-grid {
+                display: grid;
+                gap: 0.6rem;
+                grid-template-columns: repeat(2, minmax(0, 1fr));
+            }
+            .feature-card {
+                display: grid;
+                gap: 0.3rem;
+                padding: 0.72rem;
+                border: 1px solid var(--border);
+                border-radius: var(--radius);
+                background: var(--surface);
+            }
+            .feature-card h3 {
+                margin: 0;
+                font-size: 0.9rem;
+                line-height: 1.25;
+            }
+            .feature-card p {
+                margin: 0;
+                color: var(--muted);
+                font-size: 0.84rem;
                 line-height: 1.4;
             }
-
-            .help p {
+            .compliance {
+                display: grid;
+                gap: 0.5rem;
+            }
+            .chip-list {
+                display: flex;
+                flex-wrap: wrap;
+                gap: 0.4rem;
                 margin: 0;
-                max-width: 58ch;
+                padding: 0;
+                list-style: none;
             }
-
-            :focus-visible {
-                outline: none;
-                box-shadow: var(--focus);
+            .chip-list li {
+                padding: 0.35rem 0.6rem;
+                border: 1px solid var(--border);
+                border-radius: 999px;
+                background: var(--surface);
+                color: var(--muted);
+                font-size: 0.78rem;
+                font-weight: 600;
+                line-height: 1.15;
             }
-
-            @keyframes spin {
-                to {
-                    transform: rotate(360deg);
-                }
+            .help {
+                border-top: 1px solid var(--border);
+                padding-top: 0.85rem;
+                color: var(--muted);
+                font-size: 0.88rem;
+                line-height: 1.45;
             }
-
-            @keyframes meter {
-                0% {
-                    transform: translateX(-105%);
-                }
-
-                50% {
-                    transform: translateX(85%);
-                }
-
-                100% {
-                    transform: translateX(245%);
-                }
+            .help-title {
+                margin: 0 0 0.3rem;
+                color: var(--text);
+                font-size: 0.88rem;
+                font-weight: 700;
             }
-
-            @media (min-width: 42rem) {
-                .content {
-                    padding: 2rem;
-                }
-            }
-
+            .help p { margin: 0; max-width: 54ch; }
+            :focus-visible { outline: none; box-shadow: var(--focus); }
+            @media (min-width: 42rem) { .content { padding: 1.35rem; } }
             @media (max-width: 34rem) {
-                body {
-                    align-items: start;
-                }
-
-                .content {
-                    padding: 1.15rem;
-                }
-
-                .topline {
-                    align-items: flex-start;
-                    flex-direction: column;
-                    gap: 0.4rem;
-                }
-
-                .secure-label {
-                    white-space: normal;
-                }
-
-                h1 {
-                    font-size: 1.75rem;
-                }
-
-                .status-row {
-                    grid-template-columns: 1fr;
-                }
-            }
-
-            @media (prefers-reduced-motion: reduce) {
-                *,
-                *::before,
-                *::after {
-                    animation-duration: 0.01ms !important;
-                    animation-iteration-count: 1 !important;
-                    transition-duration: 0.01ms !important;
-                    scroll-behavior: auto !important;
-                }
-
-                .meter::before {
-                    transform: none;
-                }
+                body { align-items: start; }
+                .content { padding: 0.95rem; gap: 0.8rem; }
+                .topline { align-items: flex-start; flex-direction: column; gap: 0.3rem; }
+                .secure-label { white-space: normal; }
+                h1 { font-size: 1.6rem; }
+                .feature-grid { grid-template-columns: 1fr; }
+                .status-card, .info { padding: 0.75rem; }
             }
         </style>
     </head>
@@ -334,76 +262,137 @@
             <div class="content">
                 <div class="topline">
                     <div class="badge">Sicherheitscheck</div>
-                    <div class="secure-label">Automatische Prüfung</div>
                 </div>
 
                 <header>
                     <h1 id="page-title">Einen Moment bitte.</h1>
                     <p class="lead">
-                        Ihr Browser wird kurz geprüft, bevor die Seite geladen
-                        wird. Das schützt vor automatisierten Zugriffen und
-                        benötigt keine Eingabe von Ihnen.
-                    </p>
+                        Ihr Browser wird kurz geprüft. Das schützt vor Bots und läuft in der Regel ohne manuelle Aufgabe.
+                        Danach werden Sie automatisch weitergeleitet. </p>
                 </header>
 
                 <section class="status-card" aria-labelledby="progress-heading">
-                    <div class="status-row">
-                        <div class="spinner" aria-hidden="true"></div>
-                        <div class="status-copy">
-                            <h2 class="status-heading" id="progress-heading">
-                                Prüfung läuft
-                            </h2>
-                            <div
-                                class="status"
-                                id="status"
-                                role="status"
-                                aria-live="polite"
-                                aria-atomic="true"
-                            >
-                                Prüfung wird vorbereitet...
-                            </div>
-                        </div>
+                    <h2 class="help-title" id="progress-heading">Prüfung läuft</h2>
+                    <div id="status" class="status" role="status" aria-live="polite" aria-atomic="true">
+                        Prüfung wird vorbereitet...
                     </div>
-                    <div class="meter" aria-hidden="true"></div>
+                    <div class="cap-wrap">
+                        <cap-widget
+                            id="cap-widget"
+                            data-cap-api-endpoint="{{ .CapAPIEndpoint }}"
+                            data-cap-i18n-initial-state="Browser prüfen"
+                            data-cap-i18n-verifying-label="Prüfung läuft..."
+                            data-cap-i18n-solved-label="Prüfung erfolgreich"
+                            data-cap-i18n-error-label="Fehler"
+                        ></cap-widget>
+                    </div>
                 </section>
 
-                <ul class="trust-list" aria-label="Hinweise zur Prüfung">
-                    <li>
-                        Die Berechnung und Browser-Prüfung erfolgen lokal im
-                        Browser.
-                    </li>
-                    <li>
-                        Nach erfolgreicher Prüfung werden Sie automatisch
-                        weitergeleitet.
-                    </li>
-                </ul>
+                <section class="info" aria-labelledby="cap-heading">
+                    <div class="info-header">
+                        <div class="eyebrow">Was ist Cap?</div>
+                        <h2 class="info-title" id="cap-heading">Cap schützt vor Bots – ohne Rätsel und ohne Tracking.</h2>
+                    </div>
+
+                    <div class="feature-grid" aria-label="Eigenschaften von Cap">
+                        <article class="feature-card">
+                            <h3>Datenschutz</h3>
+                            <p>Kein Tracking. Keine Telemetrie. Keine Drittanbieter.</p>
+                        </article>
+                        <article class="feature-card">
+                            <h3>Unsichtbar</h3>
+                            <p>Keine Bilderrätsel. Keine Audioaufgaben. Läuft im Hintergrund.</p>
+                        </article>
+                        <article class="feature-card">
+                            <h3>Open Source</h3>
+                            <p>Selbst hostbar. Volle Kontrolle über Betrieb und Daten.</p>
+                        </article>
+                        <article class="feature-card">
+                            <h3>Mehrschichtig</h3>
+                            <p>Kombiniert Rechenaufgaben mit Browser-Prüfungen.</p>
+                        </article>
+                    </div>
+
+                    <div class="compliance" aria-labelledby="compliance-heading">
+                        <h3 class="help-title" id="compliance-heading">Datenschutz &amp; Compliance</h3>
+                        <p class="info-text">
+                            Konform mit führenden internationalen Datenschutzanforderungen.
+                        </p>
+                        <ul class="chip-list" aria-label="Unterstützte Datenschutzrahmen">
+                            <li>GDPR</li>
+                            <li>CCPA / CPRA</li>
+                            <li>HIPAA</li>
+                            <li>PIPEDA / CPPA</li>
+                            <li>LGPD</li>
+                            <li>DPDPA</li>
+                            <li>PIPL</li>
+                        </ul>
+                    </div>
+                </section>
 
                 <section class="help" aria-labelledby="help-heading">
-                    <h2 class="help-title" id="help-heading">
-                        Falls es länger dauert
-                    </h2>
-                    <p>
-                        Laden Sie die Seite neu, wenn die Prüfung nicht
-                        abgeschlossen wird oder eine Fehlermeldung erscheint.
-                    </p>
+                    <h2 class="help-title" id="help-heading">Falls es länger dauert</h2>
+                    <p>Laden Sie die Seite neu, falls die Prüfung hängen bleibt oder ein Fehler erscheint.</p>
                 </section>
             </div>
         </main>
 
         <script nonce="{{ .CSPNonce }}">
+            window.CAP_SCRIPT_NONCE = "{{ .CSPNonce }}";
+            window.CAP_CSS_NONCE = "{{ .CSPNonce }}";
+            window.CAP_CUSTOM_WASM_URL = "{{ .CapWASMURL }}";
             window.__BOT_BARRIER__ = {{ .ConfigJSON }};
         </script>
-        <script nonce="{{ .CSPNonce }}">
-            {{ .ChallengeJS }}
-        </script>
-        <script nonce="{{ .CSPNonce }}">
-            CaddyProtector.solveChallenge(
-                window.__BOT_BARRIER__,
-                document.getElementById("status"),
-            ).catch(function (err) {
-                document.getElementById("status").textContent =
-                    "Die Prüfung ist fehlgeschlagen. Bitte laden Sie die Seite neu.";
-                console.error(err);
+        <script nonce="{{ .CSPNonce }}" type="module" src="{{ .CapWidgetScript }}"></script>
+        <script nonce="{{ .CSPNonce }}" type="module">
+            const statusEl = document.getElementById("status");
+            const widget = document.getElementById("cap-widget");
+            const config = window.__BOT_BARRIER__;
+
+            widget.addEventListener("progress", (event) => {
+                statusEl.textContent = `Prüfung läuft... ${event.detail.progress}%`;
+            });
+
+            widget.addEventListener("error", (event) => {
+                statusEl.textContent = event.detail.message || "Die Prüfung ist fehlgeschlagen. Bitte laden Sie die Seite neu.";
+            });
+
+            widget.addEventListener("solve", async (event) => {
+                statusEl.textContent = "Verifikation wird abgeschlossen...";
+                try {
+                    const response = await fetch(config.verifyPath, {
+                        method: "POST",
+                        headers: { "Content-Type": "application/json" },
+                        body: JSON.stringify({ token: event.detail.token, state: config.state }),
+                    });
+
+                    const payload = await response.json().catch(() => ({}));
+                    if (!response.ok || !payload.ok || !payload.returnTo) {
+                        throw new Error("Verifikation fehlgeschlagen");
+                    }
+
+                    statusEl.textContent = "Prüfung erfolgreich. Weiterleitung...";
+                    window.location.replace(payload.returnTo);
+                } catch (error) {
+                    statusEl.textContent = "Die Prüfung ist fehlgeschlagen. Bitte laden Sie die Seite neu.";
+                    console.error(error);
+                }
+            });
+
+            async function startVerification() {
+                statusEl.textContent = "Prüfung startet...";
+
+                await customElements.whenDefined("cap-widget");
+                if (typeof widget.solve !== "function") {
+                    throw new Error("cap-widget unterstützt kein programmgesteuertes Starten");
+                }
+
+                await widget.solve();
+            }
+
+            startVerification().catch((error) => {
+                statusEl.textContent = "Die Prüfung konnte nicht gestartet werden. Bitte laden Sie die Seite neu.";
+                console.error(error);
             });
         </script>
     </body>

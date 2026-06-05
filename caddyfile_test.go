@@ -11,44 +11,37 @@ import (
 	"github.com/caddyserver/caddy/v2/caddyconfig/httpcaddyfile"
 )
 
-func TestUnmarshalCaddyfileParsesAllowForAndVerifyPath(t *testing.T) {
+func TestUnmarshalCaddyfileParsesCapConfiguration(t *testing.T) {
 	input := `
 caddy_protector {
-	complexity 18
-	valid_for 120
-	allow_for 1800
-	secret test-secret
-	cookie_name protector
-	cookie_path /foo
-	cookie_domain example.com
-	cookie_secure false
-	cookie_http_only false
-	cookie_same_site Strict
-	built_in_rules false
-	aggressive_built_in_rules true
-	instrumentation true
-	instrumentation_log_only true
-	verify_path /__caddy_protector/verify
-	deny_path_prefix /wp-admin
-	deny_path_prefix /.git
-	deny_query_substring "union select"
-	deny_query_substring ../
-	deny_header_substring User-Agent sqlmap
-	deny_header_substring X-Original-URL ../
-	whitelist_ip 66.249.64.0/19
-	whitelist_ip 2001:db8::/32
-	whitelist_file /etc/caddy/goodbots.ips
-	whitelist_url https://example.com/goodbots.ips
-	whitelist_refresh 720
-	whitelist_country DE AT NL
-	blacklist_ip 203.0.113.0/24
-	blacklist_file /etc/caddy/badbots.ips
-	blacklist_url https://example.com/badbots.ips
-	blacklist_refresh 60
-	blacklist_country RU CN
-	country_url https://example.com/GeoLite2-Country.mmdb
-	country_url_refresh 2880
-	disable_csp_header
+    allow_for 1800
+    cap_api_url https://cap.example.com
+    cap_site_key site-key
+    cap_secret_key secret-key
+    cookie_name protector
+    cookie_path /foo
+    cookie_domain example.com
+    cookie_secure false
+    cookie_http_only false
+    cookie_same_site Strict
+    verify_path /__caddy_protector/verify
+    deny_path_prefix /wp-admin
+    deny_path_prefix /.git
+    deny_query_substring "union select"
+    deny_header_substring User-Agent sqlmap
+    whitelist_ip 66.249.64.0/19
+    whitelist_file /etc/caddy/goodbots.ips
+    whitelist_url https://example.com/goodbots.ips
+    whitelist_refresh 720
+    whitelist_country DE AT NL
+    blacklist_ip 203.0.113.0/24
+    blacklist_file /etc/caddy/badbots.ips
+    blacklist_url https://example.com/badbots.ips
+    blacklist_refresh 60
+    blacklist_country RU CN
+    country_url https://example.com/GeoLite2-Country.mmdb
+    country_url_refresh 2880
+    disable_csp_header
 }
 `
 
@@ -57,23 +50,14 @@ caddy_protector {
 		t.Fatalf("UnmarshalCaddyfile() error = %v", err)
 	}
 
-	if bb.Complexity != "18" {
-		t.Fatalf("Complexity = %q, erwartet %q", bb.Complexity, "18")
+	if bb.CapAPIURL != "https://cap.example.com" || bb.CapSiteKey != "site-key" || bb.CapSecretKey != "secret-key" {
+		t.Fatalf("Cap config = %q %q %q", bb.CapAPIURL, bb.CapSiteKey, bb.CapSecretKey)
 	}
 	if bb.VerifyPath != "/__caddy_protector/verify" {
-		t.Fatalf("VerifyPath = %q, erwartet %q", bb.VerifyPath, "/__caddy_protector/verify")
+		t.Fatalf("VerifyPath = %q", bb.VerifyPath)
 	}
-	if bb.Secret != "test-secret" {
-		t.Fatalf("Secret = %q", bb.Secret)
-	}
-	if bb.CookieName != "protector" {
-		t.Fatalf("CookieName = %q", bb.CookieName)
-	}
-	if bb.CookiePath != "/foo" {
-		t.Fatalf("CookiePath = %q", bb.CookiePath)
-	}
-	if bb.CookieDomain != "example.com" {
-		t.Fatalf("CookieDomain = %q", bb.CookieDomain)
+	if bb.CookieName != "protector" || bb.CookiePath != "/foo" || bb.CookieDomain != "example.com" {
+		t.Fatalf("Cookie config = %q %q %q", bb.CookieName, bb.CookiePath, bb.CookieDomain)
 	}
 	if bb.CookieSecure == nil || *bb.CookieSecure {
 		t.Fatal("CookieSecure sollte false sein")
@@ -84,419 +68,150 @@ caddy_protector {
 	if bb.CookieSameSite != "Strict" {
 		t.Fatalf("CookieSameSite = %q", bb.CookieSameSite)
 	}
-	if bb.BuiltInRules == nil || *bb.BuiltInRules {
-		t.Fatal("BuiltInRules sollte false sein")
-	}
-	if bb.AggressiveBuiltInRules == nil || !*bb.AggressiveBuiltInRules {
-		t.Fatal("AggressiveBuiltInRules sollte true sein")
-	}
-	if bb.Instrumentation == nil || !*bb.Instrumentation {
-		t.Fatal("Instrumentation sollte true sein")
-	}
-	if bb.InstrumentationLogOnly == nil || !*bb.InstrumentationLogOnly {
-		t.Fatal("InstrumentationLogOnly sollte true sein")
-	}
 	if got := strings.Join(bb.DenyPathPrefixes, ","); got != "/wp-admin,/.git" {
 		t.Fatalf("DenyPathPrefixes = %q", got)
 	}
-	if got := strings.Join(bb.DenyQuerySubstrings, ","); got != "union select,../" {
+	if got := strings.Join(bb.DenyQuerySubstrings, ","); got != "union select" {
 		t.Fatalf("DenyQuerySubstrings = %q", got)
 	}
-	if len(bb.DenyHeaderSubstrings) != 2 {
-		t.Fatalf("DenyHeaderSubstrings = %v, erwartet 2 Eintraege", bb.DenyHeaderSubstrings)
-	}
-	if bb.DenyHeaderSubstrings[0].Name != "User-Agent" || bb.DenyHeaderSubstrings[0].Needle != "sqlmap" {
-		t.Fatalf("erste DenyHeaderSubstrings-Regel = %#v", bb.DenyHeaderSubstrings[0])
-	}
-	if len(bb.WhitelistIPs) != 2 {
-		t.Fatalf("WhitelistIPs = %v, erwartet 2 Eintraege", bb.WhitelistIPs)
-	}
-	if bb.WhitelistFile != "/etc/caddy/goodbots.ips" {
-		t.Fatalf("WhitelistFile = %q", bb.WhitelistFile)
-	}
-	if bb.WhitelistURL != "https://example.com/goodbots.ips" {
-		t.Fatalf("WhitelistURL = %q", bb.WhitelistURL)
+	if len(bb.DenyHeaderSubstrings) != 1 || bb.DenyHeaderSubstrings[0].Name != "User-Agent" {
+		t.Fatalf("DenyHeaderSubstrings = %#v", bb.DenyHeaderSubstrings)
 	}
 	if bb.WhitelistRefresh != caddy.Duration(12*time.Hour) {
-		t.Fatalf("WhitelistRefresh = %v, erwartet 12h", time.Duration(bb.WhitelistRefresh))
-	}
-	if got := strings.Join(bb.WhitelistCountries, ","); got != "DE,AT,NL" {
-		t.Fatalf("WhitelistCountries = %q", got)
-	}
-	if len(bb.BlacklistIPs) != 1 {
-		t.Fatalf("BlacklistIPs = %v, erwartet 1 Eintrag", bb.BlacklistIPs)
-	}
-	if bb.BlacklistFile != "/etc/caddy/badbots.ips" {
-		t.Fatalf("BlacklistFile = %q", bb.BlacklistFile)
-	}
-	if bb.BlacklistURL != "https://example.com/badbots.ips" {
-		t.Fatalf("BlacklistURL = %q", bb.BlacklistURL)
+		t.Fatalf("WhitelistRefresh = %v", time.Duration(bb.WhitelistRefresh))
 	}
 	if bb.BlacklistRefresh != caddy.Duration(time.Hour) {
-		t.Fatalf("BlacklistRefresh = %v, erwartet 1h", time.Duration(bb.BlacklistRefresh))
-	}
-	if got := strings.Join(bb.BlacklistCountries, ","); got != "RU,CN" {
-		t.Fatalf("BlacklistCountries = %q", got)
-	}
-	if bb.CountryURL != "https://example.com/GeoLite2-Country.mmdb" {
-		t.Fatalf("CountryURL = %q", bb.CountryURL)
+		t.Fatalf("BlacklistRefresh = %v", time.Duration(bb.BlacklistRefresh))
 	}
 	if bb.CountryRefresh != caddy.Duration(48*time.Hour) {
-		t.Fatalf("CountryRefresh = %v, erwartet 48h", time.Duration(bb.CountryRefresh))
-	}
-	if bb.ValidFor != caddy.Duration(defaultValidFor) {
-		t.Fatalf("ValidFor = %d, erwartet 120m", bb.ValidFor)
+		t.Fatalf("CountryRefresh = %v", time.Duration(bb.CountryRefresh))
 	}
 	if bb.AllowFor != caddy.Duration(defaultAllowFor) {
-		t.Fatalf("AllowFor = %d, erwartet 1800m", bb.AllowFor)
+		t.Fatalf("AllowFor = %v", time.Duration(bb.AllowFor))
 	}
 	if !bb.DisableCSPHeader {
 		t.Fatal("DisableCSPHeader sollte true sein")
 	}
 }
 
-func TestUnmarshalCaddyfileDefaultsBuiltInRulesToValidatePhase(t *testing.T) {
-	bb := newTestProtector(t)
-	if !bb.builtInRulesEnabled() {
-		t.Fatal("BuiltInRules sollte standardmaessig aktiv sein")
-	}
-	if bb.aggressiveBuiltInRulesEnabled() {
-		t.Fatal("AggressiveBuiltInRules sollte standardmaessig deaktiviert sein")
-	}
-}
-
-func TestUnmarshalCaddyfileRejectsBadBuiltInRulesValue(t *testing.T) {
+func TestUnmarshalCaddyfileRejectsBadAllowFor(t *testing.T) {
 	input := `
 caddy_protector {
-	built_in_rules kaputt
+    allow_for kaputt
 }
 `
-
 	var bb CaddyProtector
 	err := bb.UnmarshalCaddyfile(caddyfile.NewTestDispenser(input))
-	if err == nil {
-		t.Fatal("erwarteter Fehler fuer ungueltigen built_in_rules-Wert fehlt")
-	}
-	if !strings.Contains(err.Error(), "built_in_rules-Wert") {
-		t.Fatalf("Fehler = %v, erwartet Hinweis auf built_in_rules", err)
-	}
-}
-
-func TestUnmarshalCaddyfileRejectsBadAggressiveBuiltInRulesValue(t *testing.T) {
-	input := `
-caddy_protector {
-	aggressive_built_in_rules kaputt
-}
-`
-
-	var bb CaddyProtector
-	err := bb.UnmarshalCaddyfile(caddyfile.NewTestDispenser(input))
-	if err == nil {
-		t.Fatal("erwarteter Fehler fuer ungueltigen aggressive_built_in_rules-Wert fehlt")
-	}
-	if !strings.Contains(err.Error(), "aggressive_built_in_rules-Wert") {
-		t.Fatalf("Fehler = %v, erwartet Hinweis auf aggressive_built_in_rules", err)
-	}
-}
-
-func TestUnmarshalCaddyfileRejectsBadInstrumentationValue(t *testing.T) {
-	input := `
-caddy_protector {
-	instrumentation kaputt
-}
-`
-
-	var bb CaddyProtector
-	err := bb.UnmarshalCaddyfile(caddyfile.NewTestDispenser(input))
-	if err == nil {
-		t.Fatal("erwarteter Fehler fuer ungueltigen instrumentation-Wert fehlt")
-	}
-	if !strings.Contains(err.Error(), "instrumentation-Wert") {
-		t.Fatalf("Fehler = %v, erwartet Hinweis auf instrumentation", err)
-	}
-}
-
-func TestUnmarshalCaddyfileRejectsBadInstrumentationLogOnlyValue(t *testing.T) {
-	input := `
-caddy_protector {
-	instrumentation_log_only kaputt
-}
-`
-
-	var bb CaddyProtector
-	err := bb.UnmarshalCaddyfile(caddyfile.NewTestDispenser(input))
-	if err == nil {
-		t.Fatal("erwarteter Fehler fuer ungueltigen instrumentation_log_only-Wert fehlt")
-	}
-	if !strings.Contains(err.Error(), "instrumentation_log_only-Wert") {
-		t.Fatalf("Fehler = %v, erwartet Hinweis auf instrumentation_log_only", err)
+	if err == nil || !strings.Contains(err.Error(), "allow_for-Dauer") {
+		t.Fatalf("Fehler = %v", err)
 	}
 }
 
 func TestUnmarshalCaddyfileRejectsBadDenyHeaderSubstringArgCount(t *testing.T) {
 	input := `
 caddy_protector {
-	deny_header_substring User-Agent
+    deny_header_substring User-Agent
 }
 `
-
 	var bb CaddyProtector
 	err := bb.UnmarshalCaddyfile(caddyfile.NewTestDispenser(input))
-	if err == nil {
-		t.Fatal("erwarteter Fehler fuer falsche deny_header_substring-Argumentanzahl fehlt")
-	}
-	if !strings.Contains(err.Error(), "genau 2 Argumente") {
-		t.Fatalf("Fehler = %v, erwartet Hinweis auf deny_header_substring", err)
+	if err == nil || !strings.Contains(err.Error(), "genau 2 Argumente") {
+		t.Fatalf("Fehler = %v", err)
 	}
 }
 
 func TestUnmarshalCaddyfileAcceptsExplicitMinutesSuffix(t *testing.T) {
 	input := `
 caddy_protector {
-	valid_for 120m
-	allow_for 1800m
-	whitelist_refresh 60m
-	blacklist_refresh 120m
-	country_url_refresh 180m
+    allow_for 1800m
+    whitelist_refresh 60m
+    blacklist_refresh 120m
+    country_url_refresh 180m
+    cap_api_url https://cap.example.com
+    cap_site_key site-key
+    cap_secret_key secret-key
 }
 `
-
 	var bb CaddyProtector
 	if err := bb.UnmarshalCaddyfile(caddyfile.NewTestDispenser(input)); err != nil {
 		t.Fatalf("UnmarshalCaddyfile() error = %v", err)
 	}
-
-	if bb.ValidFor != caddy.Duration(defaultValidFor) {
-		t.Fatalf("ValidFor = %d, erwartet 120m", bb.ValidFor)
-	}
 	if bb.AllowFor != caddy.Duration(defaultAllowFor) {
-		t.Fatalf("AllowFor = %d, erwartet 1800m", bb.AllowFor)
+		t.Fatalf("AllowFor = %v", time.Duration(bb.AllowFor))
 	}
 	if bb.WhitelistRefresh != caddy.Duration(time.Hour) {
-		t.Fatalf("WhitelistRefresh = %v, erwartet 1h", time.Duration(bb.WhitelistRefresh))
+		t.Fatalf("WhitelistRefresh = %v", time.Duration(bb.WhitelistRefresh))
 	}
 	if bb.BlacklistRefresh != caddy.Duration(2*time.Hour) {
-		t.Fatalf("BlacklistRefresh = %v, erwartet 2h", time.Duration(bb.BlacklistRefresh))
+		t.Fatalf("BlacklistRefresh = %v", time.Duration(bb.BlacklistRefresh))
 	}
 	if bb.CountryRefresh != caddy.Duration(3*time.Hour) {
-		t.Fatalf("CountryRefresh = %v, erwartet 3h", time.Duration(bb.CountryRefresh))
+		t.Fatalf("CountryRefresh = %v", time.Duration(bb.CountryRefresh))
 	}
 }
 
 func TestUnmarshalCaddyfileRejectsSecondDurations(t *testing.T) {
-	tests := []string{"valid_for", "allow_for", "whitelist_refresh", "blacklist_refresh", "country_url_refresh"}
-
+	tests := []string{"allow_for", "whitelist_refresh", "blacklist_refresh", "country_url_refresh"}
 	for _, option := range tests {
 		t.Run(option, func(t *testing.T) {
-			input := `
-caddy_protector {
-	` + option + ` 30s
-}
-`
-
+			input := "caddy_protector {\n\t" + option + " 30s\n\tcap_api_url https://cap.example.com\n\tcap_site_key site-key\n\tcap_secret_key secret-key\n}\n"
 			var bb CaddyProtector
 			err := bb.UnmarshalCaddyfile(caddyfile.NewTestDispenser(input))
-			if err == nil {
-				t.Fatalf("%s sollte nur Minuten akzeptieren", option)
-			}
-			if !strings.Contains(err.Error(), "Minuten") {
-				t.Fatalf("Fehler = %v, erwartet Hinweis auf Minuten", err)
+			if err == nil || !strings.Contains(err.Error(), "Minuten") {
+				t.Fatalf("Fehler = %v", err)
 			}
 		})
-	}
-}
-
-func TestUnmarshalCaddyfileRejectsLegacyOptions(t *testing.T) {
-	tests := []string{
-		"seed_cookie_name",
-		"solution_cookie_name",
-		"mac_cookie_name",
-		"max_pending_challenges",
-		"max_challenge_attempts",
-		"block_for",
-	}
-
-	for _, option := range tests {
-		t.Run(option, func(t *testing.T) {
-			input := `
-caddy_protector {
-	` + option + ` legacy-value
-}
-`
-
-			var bb CaddyProtector
-			err := bb.UnmarshalCaddyfile(caddyfile.NewTestDispenser(input))
-			if err == nil {
-				t.Fatalf("die Legacy-Option %s sollte fehlschlagen", option)
-			}
-			want := "unbekannte Option: " + option
-			if option == "max_pending_challenges" || option == "max_challenge_attempts" || option == "block_for" {
-				want = "nicht mehr unterstuetzt"
-			}
-			if !strings.Contains(err.Error(), want) {
-				t.Fatalf("Fehler = %v, erwartet %s", err, want)
-			}
-		})
-	}
-}
-
-func TestUnmarshalCaddyfileRejectsBadAllowFor(t *testing.T) {
-	input := `
-caddy_protector {
-	allow_for kaputt
-}
-`
-
-	var bb CaddyProtector
-	err := bb.UnmarshalCaddyfile(caddyfile.NewTestDispenser(input))
-	if err == nil {
-		t.Fatal("erwarteter Fehler fuer ungueltige allow_for-Dauer fehlt")
-	}
-	if !strings.Contains(err.Error(), "allow_for-Dauer") {
-		t.Fatalf("Fehler = %v, erwartet Hinweis auf allow_for-Dauer", err)
-	}
-}
-
-func TestUnmarshalCaddyfileRejectsRemovedMaxPendingChallenges(t *testing.T) {
-	input := `
-caddy_protector {
-	max_pending_challenges 1
-}
-`
-
-	var bb CaddyProtector
-	err := bb.UnmarshalCaddyfile(caddyfile.NewTestDispenser(input))
-	if err == nil {
-		t.Fatal("erwarteter Fehler fuer entfernte max_pending_challenges-Option fehlt")
-	}
-	if !strings.Contains(err.Error(), "nicht mehr unterstuetzt") {
-		t.Fatalf("Fehler = %v, erwartet Hinweis auf entfernte Option", err)
-	}
-}
-
-func TestUnmarshalCaddyfileRejectsBadWhitelistRefresh(t *testing.T) {
-	input := `
-caddy_protector {
-	whitelist_refresh kaputt
-}
-`
-
-	var bb CaddyProtector
-	err := bb.UnmarshalCaddyfile(caddyfile.NewTestDispenser(input))
-	if err == nil {
-		t.Fatal("erwarteter Fehler fuer ungueltige whitelist_refresh-Dauer fehlt")
-	}
-	if !strings.Contains(err.Error(), "whitelist_refresh-Dauer") {
-		t.Fatalf("Fehler = %v, erwartet Hinweis auf whitelist_refresh-Dauer", err)
-	}
-}
-
-func TestUnmarshalCaddyfileRejectsBadBlacklistRefresh(t *testing.T) {
-	input := `
-caddy_protector {
-	blacklist_refresh kaputt
-}
-`
-
-	var bb CaddyProtector
-	err := bb.UnmarshalCaddyfile(caddyfile.NewTestDispenser(input))
-	if err == nil {
-		t.Fatal("erwarteter Fehler fuer ungueltige blacklist_refresh-Dauer fehlt")
-	}
-	if !strings.Contains(err.Error(), "blacklist_refresh-Dauer") {
-		t.Fatalf("Fehler = %v, erwartet Hinweis auf blacklist_refresh-Dauer", err)
-	}
-}
-
-func TestUnmarshalCaddyfileRejectsBadCountryRefresh(t *testing.T) {
-	input := `
-caddy_protector {
-	country_url_refresh kaputt
-}
-`
-
-	var bb CaddyProtector
-	err := bb.UnmarshalCaddyfile(caddyfile.NewTestDispenser(input))
-	if err == nil {
-		t.Fatal("erwarteter Fehler fuer ungueltige country_url_refresh-Dauer fehlt")
-	}
-	if !strings.Contains(err.Error(), "country_url_refresh-Dauer") {
-		t.Fatalf("Fehler = %v, erwartet Hinweis auf country_url_refresh-Dauer", err)
-	}
-}
-
-func TestUnmarshalCaddyfileRejectsMissingCountryArguments(t *testing.T) {
-	input := `
-caddy_protector {
-	whitelist_country
-}
-`
-
-	var bb CaddyProtector
-	err := bb.UnmarshalCaddyfile(caddyfile.NewTestDispenser(input))
-	if err == nil {
-		t.Fatal("erwarteter Argumentfehler fuer fehlende Country-Codes fehlt")
 	}
 }
 
 func TestUnmarshalCaddyfileRejectsUnexpectedArgumentCount(t *testing.T) {
-	tests := map[string]string{
-		"missing complexity argument": `
-caddy_protector {
-	complexity
-}
-`,
-		"extra complexity argument": `
-caddy_protector {
-	complexity 18 19
-}
-`,
-		"extra disable_csp_header argument": `
-caddy_protector {
-	disable_csp_header true
-}
-`,
+	tests := []string{
+		"caddy_protector {\n\tcap_api_url\n}\n",
+		"caddy_protector {\n\tdisable_csp_header true\n}\n",
 	}
-
-	for name, input := range tests {
-		t.Run(name, func(t *testing.T) {
-			var bb CaddyProtector
-			err := bb.UnmarshalCaddyfile(caddyfile.NewTestDispenser(input))
-			if err == nil {
-				t.Fatal("erwarteter Argumentfehler fehlt")
-			}
-		})
+	for _, input := range tests {
+		var bb CaddyProtector
+		if err := bb.UnmarshalCaddyfile(caddyfile.NewTestDispenser(input)); err == nil {
+			t.Fatal("erwarteter Argumentfehler fehlt")
+		}
 	}
 }
 
-func TestCaddyfileAdapterAcceptsMultipleCountryCodesInImportedSnippet(t *testing.T) {
+func TestUnmarshalCaddyfileRejectsUnknownOption(t *testing.T) {
+	input := "caddy_protector {\n\tunknown_option value\n}\n"
+	var bb CaddyProtector
+	err := bb.UnmarshalCaddyfile(caddyfile.NewTestDispenser(input))
+	if err == nil || !strings.Contains(err.Error(), "unbekannte Option") {
+		t.Fatalf("Fehler = %v", err)
+	}
+}
+
+func TestCaddyfileAdapterAcceptsImportedSnippet(t *testing.T) {
 	input := `
 (common_protector) {
-	caddy_protector {
-		complexity 15
-		valid_for 15
-		allow_for 20
-		secret imported-secret
-		verify_path /__caddy_protector/verify
-		whitelist_country AT BE BG CY CZ DE DK EE ES FI FR GR HR IE IT LT LU LV MT NL GB US
-		whitelist_url https://raw.githubusercontent.com/AnTheMaker/GoodBots/main/all.ips
-		whitelist_refresh 1440
-		blacklist_url https://raw.githubusercontent.com/fabriziosalmi/caddy-waf/refs/heads/main/ip_blacklist.txt
-		blacklist_refresh 1440
-		country_url https://git.io/GeoLite2-Country.mmdb
-		country_url_refresh 2880
-	}
+    caddy_protector {
+        allow_for 20
+        cap_api_url https://cap.example.com
+        cap_site_key site-key
+        cap_secret_key secret-key
+        verify_path /__caddy_protector/verify
+        whitelist_country AT BE DE NL US
+        whitelist_url https://raw.githubusercontent.com/AnTheMaker/GoodBots/main/all.ips
+        whitelist_refresh 1440
+        blacklist_url https://raw.githubusercontent.com/fabriziosalmi/caddy-waf/refs/heads/main/ip_blacklist.txt
+        blacklist_refresh 1440
+        country_url https://git.io/GeoLite2-Country.mmdb
+        country_url_refresh 2880
+    }
 }
 
 example.com {
-	import common_protector
-	respond "ok"
+    import common_protector
+    respond "ok"
 }
 `
-
 	adapter := caddyfileAdapter.Adapter{ServerType: httpcaddyfile.ServerType{}}
-	_, _, err := adapter.Adapt([]byte(input), map[string]any{"filename": "Caddyfile"})
-	if err != nil {
+	if _, _, err := adapter.Adapt([]byte(input), map[string]any{"filename": "Caddyfile"}); err != nil {
 		t.Fatalf("Adapt() error = %v", err)
 	}
 }

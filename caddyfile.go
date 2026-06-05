@@ -71,24 +71,18 @@ func (bb *CaddyProtector) UnmarshalCaddyfile(d *caddyfile.Dispenser) error {
 			}
 
 			switch param {
-			case "complexity":
-				bb.Complexity = arg
-			case "valid_for":
-				duration, err := parseMinutesDuration(arg)
-				if err != nil {
-					return d.Errf("ungueltige valid_for-Dauer: %v", err)
-				}
-				bb.ValidFor = caddy.Duration(duration)
 			case "allow_for":
 				duration, err := parseMinutesDuration(arg)
 				if err != nil {
 					return d.Errf("ungueltige allow_for-Dauer: %v", err)
 				}
 				bb.AllowFor = caddy.Duration(duration)
-			case "secret":
-				bb.Secret = arg
-			case "secret_file":
-				bb.SecretFile = arg
+			case "cap_api_url":
+				bb.CapAPIURL = arg
+			case "cap_site_key":
+				bb.CapSiteKey = arg
+			case "cap_secret_key":
+				bb.CapSecretKey = arg
 			case "cookie_name":
 				bb.CookieName = arg
 			case "cookie_path":
@@ -107,30 +101,6 @@ func (bb *CaddyProtector) UnmarshalCaddyfile(d *caddyfile.Dispenser) error {
 					return d.Errf("ungueltiger cookie_http_only-Wert: %v", err)
 				}
 				bb.CookieHTTPOnly = &value
-			case "built_in_rules":
-				value, err := strconv.ParseBool(arg)
-				if err != nil {
-					return d.Errf("ungueltiger built_in_rules-Wert: %v", err)
-				}
-				bb.BuiltInRules = &value
-			case "aggressive_built_in_rules":
-				value, err := strconv.ParseBool(arg)
-				if err != nil {
-					return d.Errf("ungueltiger aggressive_built_in_rules-Wert: %v", err)
-				}
-				bb.AggressiveBuiltInRules = &value
-			case "instrumentation":
-				value, err := strconv.ParseBool(arg)
-				if err != nil {
-					return d.Errf("ungueltiger instrumentation-Wert: %v", err)
-				}
-				bb.Instrumentation = &value
-			case "instrumentation_log_only":
-				value, err := strconv.ParseBool(arg)
-				if err != nil {
-					return d.Errf("ungueltiger instrumentation_log_only-Wert: %v", err)
-				}
-				bb.InstrumentationLogOnly = &value
 			case "cookie_same_site":
 				bb.CookieSameSite = arg
 			case "verify_path":
@@ -173,12 +143,6 @@ func (bb *CaddyProtector) UnmarshalCaddyfile(d *caddyfile.Dispenser) error {
 				bb.CountryRefresh = caddy.Duration(duration)
 			case "template":
 				bb.TemplatePath = arg
-			case "max_challenge_attempts":
-				return d.Errf("max_challenge_attempts wird in der stateless Variante nicht mehr unterstuetzt")
-			case "block_for":
-				return d.Errf("block_for wird in der stateless Variante nicht mehr unterstuetzt")
-			case "max_pending_challenges":
-				return d.Errf("max_pending_challenges wird in der stateless Variante nicht mehr unterstuetzt")
 			default:
 				return d.Errf("unbekannte Option: %s", param)
 			}
