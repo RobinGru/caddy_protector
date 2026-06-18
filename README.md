@@ -5,6 +5,7 @@
 Die Freigabe erfolgt über ein signiertes `HttpOnly`-Cookie. Cap übernimmt die externe Browser-Verifikation, während `caddy_protector` weiterhin Request-Filter, Allowlists, Blacklists, Country-Regeln und das lokale Freigabe-Cookie verwaltet.
 
 Cap musst du selbst hosten. Dieses Repository stellt keinen gehosteten Cap-Dienst bereit und muss gegen deine eigene Cap-Instanz konfiguriert werden.
+siehe: https://trycap.dev/
 
 Wichtig: Das Modul ist eine Hürde gegen Bots, Scraper und einfachen Abuse, aber kein Ersatz für Authentifizierung, Autorisierung, Rate Limiting oder eine WAF.
 
