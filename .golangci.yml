@@ -62,7 +62,8 @@ formatters:
     - goimports
   settings:
     goimports:
-      local-prefixes: github.com/RobinGru/caddy_protector
+      local-prefixes:
+        - github.com/RobinGru/caddy_protector
 
 issues:
   max-same-issues: 0
