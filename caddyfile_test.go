@@ -7,7 +7,6 @@ import (
 
 	"github.com/caddyserver/caddy/v2"
 	"github.com/caddyserver/caddy/v2/caddyconfig/caddyfile"
-	caddyfileAdapter "github.com/caddyserver/caddy/v2/caddyconfig/caddyfile"
 	"github.com/caddyserver/caddy/v2/caddyconfig/httpcaddyfile"
 )
 
@@ -210,7 +209,7 @@ example.com {
     respond "ok"
 }
 `
-	adapter := caddyfileAdapter.Adapter{ServerType: httpcaddyfile.ServerType{}}
+	adapter := caddyfile.Adapter{ServerType: httpcaddyfile.ServerType{}}
 	if _, _, err := adapter.Adapt([]byte(input), map[string]any{"filename": "Caddyfile"}); err != nil {
 		t.Fatalf("Adapt() error = %v", err)
 	}

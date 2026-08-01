@@ -1,0 +1,69 @@
+version: "2"
+
+run:
+  timeout: 5m
+  tests: true
+
+linters:
+  default: standard
+  enable:
+    - bodyclose
+    - dupl
+    - errorlint
+    - gocheckcompilerdirectives
+    - gocognit
+    - goconst
+    - gocritic
+    - gosec
+    - misspell
+    - nakedret
+    - nestif
+    - nilerr
+    - nilnil
+    - noctx
+    - nolintlint
+    - prealloc
+    - revive
+    - rowserrcheck
+    - sqlclosecheck
+    - testifylint
+    - thelper
+    - tparallel
+    - unconvert
+    - unparam
+    - unused
+    - usestdlibvars
+    - wastedassign
+    - whitespace
+  settings:
+    misspell:
+      ignore-rules:
+        - Konfiguration
+        - Verifikation
+        - verifikation
+  exclusions:
+    rules:
+      - path: '_test\.go'
+        linters:
+          - dupl
+          - goconst
+          - gosec
+          - gocognit
+          - nestif
+          - revive
+          - unparam
+      - path: 'challenge_template\.html'
+        linters:
+          - misspell
+
+formatters:
+  enable:
+    - gofmt
+    - goimports
+  settings:
+    goimports:
+      local-prefixes: github.com/RobinGru/caddy_protector
+
+issues:
+  max-same-issues: 0
+  max-issues-per-linter: 0

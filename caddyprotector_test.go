@@ -465,7 +465,11 @@ func TestLoadAllowlistMergesInlineFileAndURL(t *testing.T) {
 	if err != nil {
 		t.Fatalf("CreateTemp() error = %v", err)
 	}
-	defer tmpFile.Close()
+	t.Cleanup(func() {
+		if err := tmpFile.Close(); err != nil {
+			t.Errorf("Close() error = %v", err)
+		}
+	})
 	if _, err := tmpFile.WriteString("198.51.100.0/24\n"); err != nil {
 		t.Fatalf("WriteString() error = %v", err)
 	}
