@@ -182,7 +182,7 @@ func TestAllowCookieRoundTrip(t *testing.T) {
 	if err := bb.writeAllowCookie(rr, time.Now()); err != nil {
 		t.Fatalf("writeAllowCookie() error = %v", err)
 	}
-	req := httptest.NewRequest(http.MethodGet, "http://example.com/protected", nil)
+	req := httptest.NewRequestWithContext(context.Background(), http.MethodGet, "http://example.com/protected", nil)
 	for _, cookie := range rr.Result().Cookies() {
 		req.AddCookie(cookie)
 	}
@@ -207,7 +207,7 @@ func TestHandleVerifyRejectsWrongContentType(t *testing.T) {
 func TestHandleVerifyRejectsMissingToken(t *testing.T) {
 	bb := newTestProtector(t)
 	body, _ := json.Marshal(verifyRequest{State: mustReturnState(t, bb, "/protected")})
-	req := httptest.NewRequest(http.MethodPost, defaultVerifyPath, bytes.NewReader(body))
+	req := httptest.NewRequestWithContext(context.Background(), http.MethodPost, defaultVerifyPath, bytes.NewReader(body))
 	req.Header.Set("Content-Type", "application/json")
 	rr := httptest.NewRecorder()
 	if err := bb.handleVerify(rr, req); err != nil {
@@ -221,7 +221,7 @@ func TestHandleVerifyRejectsMissingToken(t *testing.T) {
 func TestHandleVerifyRejectsInvalidState(t *testing.T) {
 	bb := newTestProtector(t)
 	body, _ := json.Marshal(verifyRequest{Token: "cap-token", State: "kaputt"})
-	req := httptest.NewRequest(http.MethodPost, defaultVerifyPath, bytes.NewReader(body))
+	req := httptest.NewRequestWithContext(context.Background(), http.MethodPost, defaultVerifyPath, bytes.NewReader(body))
 	req.Header.Set("Content-Type", "application/json")
 	rr := httptest.NewRecorder()
 	if err := bb.handleVerify(rr, req); err != nil {
@@ -562,16 +562,15 @@ func verifyRequestFor(t *testing.T, bb *CaddyProtector, token string) *http.Requ
 	if err != nil {
 		t.Fatalf("json.Marshal() error = %v", err)
 	}
-	req := httptest.NewRequest(http.MethodPost, defaultVerifyPath, bytes.NewReader(body))
+	req := httptest.NewRequestWithContext(context.Background(), http.MethodPost, defaultVerifyPath, bytes.NewReader(body))
 	req.Header.Set("Content-Type", "application/json")
 	return req
 }
 
 func newChallengeRequest(method, rawURL, clientIP, userAgent string) *http.Request {
-	req := httptest.NewRequest(method, rawURL, nil)
-	ctx := context.WithValue(req.Context(), caddy.ReplacerCtxKey, caddy.NewReplacer())
+	ctx := context.WithValue(context.Background(), caddy.ReplacerCtxKey, caddy.NewReplacer())
 	ctx = context.WithValue(ctx, caddyhttp.VarsCtxKey, map[string]any{"client_ip": clientIP})
-	req = req.WithContext(ctx)
+	req := httptest.NewRequestWithContext(ctx, method, rawURL, nil)
 	req.Header.Set("User-Agent", userAgent)
 	return req
 }

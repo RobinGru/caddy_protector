@@ -48,6 +48,8 @@ const (
 	returnStateValidFor = 15 * time.Minute
 	returnStateContext  = "caddy_protector:return_state:v1"
 	cookieMACContext    = "caddy_protector:cookie_mac:v1"
+	configRuleSource    = "config"
+	cspSelfSource       = "'self'"
 )
 
 type verifyRequest struct {
@@ -573,14 +575,14 @@ func (bb *CaddyProtector) compileRequestRules() error {
 		if err != nil {
 			return err
 		}
-		pathRules = append(pathRules, compiledStringRule{Value: value, Source: "config"})
+		pathRules = append(pathRules, compiledStringRule{Value: value, Source: configRuleSource})
 	}
 	for _, raw := range bb.DenyQuerySubstrings {
 		value, err := normalizeRuleValue("deny_query_substring", raw)
 		if err != nil {
 			return err
 		}
-		queryRules = append(queryRules, compiledStringRule{Value: value, Source: "config"})
+		queryRules = append(queryRules, compiledStringRule{Value: value, Source: configRuleSource})
 	}
 	for i, rule := range bb.DenyHeaderSubstrings {
 		name := textproto.CanonicalMIMEHeaderKey(strings.TrimSpace(rule.Name))
@@ -592,7 +594,7 @@ func (bb *CaddyProtector) compileRequestRules() error {
 			return err
 		}
 		bb.DenyHeaderSubstrings[i] = HeaderSubstringRule{Name: name, Needle: strings.TrimSpace(rule.Needle)}
-		headerRules = append(headerRules, compiledHeaderRule{Name: name, Needle: needle, Source: "config"})
+		headerRules = append(headerRules, compiledHeaderRule{Name: name, Needle: needle, Source: configRuleSource})
 	}
 
 	bb.compiledPathRules = pathRules
@@ -756,18 +758,18 @@ func (bb *CaddyProtector) challengePageCSP(cspNonce string) string {
 		"'unsafe-inline'",
 	}, " ")
 	connectSrc := strings.Join([]string{
-		"'self'",
+		cspSelfSource,
 		capOrigin,
 		jsDelivrOrigin,
 	}, " ")
 	workerSrc := strings.Join([]string{
-		"'self'",
+		cspSelfSource,
 		"blob:",
 		capOrigin,
 		jsDelivrOrigin,
 	}, " ")
 	frameSrc := strings.Join([]string{
-		"'self'",
+		cspSelfSource,
 		"blob:",
 	}, " ")
 
@@ -899,6 +901,8 @@ func (bb *CaddyProtector) writeAllowCookie(w http.ResponseWriter, now time.Time)
 	if err != nil {
 		return err
 	}
+	// Cookie security attributes are intentionally configurable by the Caddy administrator.
+	// #nosec G124
 	http.SetCookie(w, &http.Cookie{
 		Name:     bb.CookieName,
 		Value:    value,
