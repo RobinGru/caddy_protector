@@ -48,6 +48,8 @@ const (
 	returnStateValidFor = 15 * time.Minute
 	returnStateContext  = "caddy_protector:return_state:v1"
 	cookieMACContext    = "caddy_protector:cookie_mac:v1"
+	configRuleSource    = "config"
+	cspSelfSource       = "'self'"
 )
 
 type verifyRequest struct {
@@ -104,6 +106,7 @@ type allowCookieClaims struct {
 	ExpiresAt int64 `json:"exp"`
 }
 
+// HeaderSubstringRule beschreibt einen Header-Namen und einen zu sperrenden Teilstring.
 type HeaderSubstringRule struct {
 	Name   string `json:"name"`
 	Needle string `json:"needle"`
@@ -238,6 +241,7 @@ type CaddyProtector struct {
 	compiledHeaderRules []compiledHeaderRule
 }
 
+// CaddyModule beschreibt das Caddy-Modul und seine Instanziierung.
 func (*CaddyProtector) CaddyModule() caddy.ModuleInfo {
 	return caddy.ModuleInfo{
 		ID:  "http.handlers.caddy_protector",
@@ -438,7 +442,8 @@ func (bb *CaddyProtector) ServeHTTP(w http.ResponseWriter, r *http.Request, next
 	}
 
 	clientAddr, clientAddrErr := netip.ParseAddr(clientIP)
-	countryCode, countryFound := "", false
+	var countryCode string
+	var countryFound bool
 	if bb.hasCountryRules {
 		countryCode, countryFound = bb.lookupCountryCode(clientAddr, clientAddrErr)
 		if countryFound {
@@ -570,14 +575,14 @@ func (bb *CaddyProtector) compileRequestRules() error {
 		if err != nil {
 			return err
 		}
-		pathRules = append(pathRules, compiledStringRule{Value: value, Source: "config"})
+		pathRules = append(pathRules, compiledStringRule{Value: value, Source: configRuleSource})
 	}
 	for _, raw := range bb.DenyQuerySubstrings {
 		value, err := normalizeRuleValue("deny_query_substring", raw)
 		if err != nil {
 			return err
 		}
-		queryRules = append(queryRules, compiledStringRule{Value: value, Source: "config"})
+		queryRules = append(queryRules, compiledStringRule{Value: value, Source: configRuleSource})
 	}
 	for i, rule := range bb.DenyHeaderSubstrings {
 		name := textproto.CanonicalMIMEHeaderKey(strings.TrimSpace(rule.Name))
@@ -589,7 +594,7 @@ func (bb *CaddyProtector) compileRequestRules() error {
 			return err
 		}
 		bb.DenyHeaderSubstrings[i] = HeaderSubstringRule{Name: name, Needle: strings.TrimSpace(rule.Needle)}
-		headerRules = append(headerRules, compiledHeaderRule{Name: name, Needle: needle, Source: "config"})
+		headerRules = append(headerRules, compiledHeaderRule{Name: name, Needle: needle, Source: configRuleSource})
 	}
 
 	bb.compiledPathRules = pathRules
@@ -662,7 +667,8 @@ func (bb *CaddyProtector) serveChallenge(w http.ResponseWriter, r *http.Request)
 		"CapWidgetScript": bb.capAssetURL("widget.js"),
 		"CapAPIEndpoint":  bb.capAPIEndpoint(),
 		"CapWASMURL":      bb.capAssetURL("cap_wasm_bg.wasm"),
-		"ConfigJSON":      template.JS(string(configJSON)),
+		// configJSON is produced by encoding/json, which escapes HTML-sensitive characters.
+		"ConfigJSON": template.JS(string(configJSON)), // #nosec G203 -- safe JSON for an inline script.
 	}
 
 	setNoStoreHeaders(w)
@@ -677,7 +683,8 @@ func (bb *CaddyProtector) serveChallenge(w http.ResponseWriter, r *http.Request)
 			return nil
 		}
 		w.Header().Set("Content-Security-Policy", bb.challengePageCSP(cspNonce))
-		data["CSPNonce"] = template.HTMLAttr(cspNonce)
+		// cspNonce is a server-generated base64 value with no HTML-significant characters.
+		data["CSPNonce"] = template.HTMLAttr(cspNonce) // #nosec G203 -- trusted CSP nonce.
 	}
 
 	if err := bb.renderChallengePage(w, data); err != nil {
@@ -751,18 +758,18 @@ func (bb *CaddyProtector) challengePageCSP(cspNonce string) string {
 		"'unsafe-inline'",
 	}, " ")
 	connectSrc := strings.Join([]string{
-		"'self'",
+		cspSelfSource,
 		capOrigin,
 		jsDelivrOrigin,
 	}, " ")
 	workerSrc := strings.Join([]string{
-		"'self'",
+		cspSelfSource,
 		"blob:",
 		capOrigin,
 		jsDelivrOrigin,
 	}, " ")
 	frameSrc := strings.Join([]string{
-		"'self'",
+		cspSelfSource,
 		"blob:",
 	}, " ")
 
@@ -894,6 +901,8 @@ func (bb *CaddyProtector) writeAllowCookie(w http.ResponseWriter, now time.Time)
 	if err != nil {
 		return err
 	}
+	// Cookie security attributes are intentionally configurable by the Caddy administrator.
+	// #nosec G124
 	http.SetCookie(w, &http.Cookie{
 		Name:     bb.CookieName,
 		Value:    value,
@@ -967,10 +976,10 @@ func (bb *CaddyProtector) verifySignedValue(raw string, key []byte, out any) err
 	}
 	payloadJSON, err := base64.RawURLEncoding.DecodeString(payloadPart)
 	if err != nil {
-		return fmt.Errorf("Payload konnte nicht dekodiert werden: %w", err)
+		return fmt.Errorf("payload konnte nicht dekodiert werden: %w", err)
 	}
 	if err := json.Unmarshal(payloadJSON, out); err != nil {
-		return fmt.Errorf("Payload konnte nicht dekodiert werden: %w", err)
+		return fmt.Errorf("payload konnte nicht dekodiert werden: %w", err)
 	}
 	return nil
 }
@@ -996,7 +1005,7 @@ func validateIPListConfig(kind string, inline []string, _ string, rawURL string,
 		return fmt.Errorf("%s_refresh muss groesser oder gleich 0 sein", kind)
 	}
 	for i, entry := range inline {
-		if _, err := parseAllowlistEntry(kind+":inline", i+1, entry); err != nil {
+		if _, _, err := parseAllowlistEntry(kind+":inline", i+1, entry); err != nil {
 			return err
 		}
 	}
@@ -1187,7 +1196,8 @@ func (bb *CaddyProtector) loadIPList(ctx context.Context, kind string, inline []
 		return nil, err
 	}
 	if filePath != "" {
-		content, err := os.ReadFile(filePath)
+		// The Caddy administrator explicitly configures this local list source.
+		content, err := os.ReadFile(filePath) // #nosec G304 -- operator-configured allowlist source.
 		if err != nil {
 			return nil, fmt.Errorf("%s_file konnte nicht gelesen werden: %w", kind, err)
 		}
@@ -1228,11 +1238,11 @@ func (bb *CaddyProtector) parseAllowlistLines(result *allowlistParseResult, sour
 	lineNo := 0
 	for scanner.Scan() {
 		lineNo++
-		entry, err := parseAllowlistEntry(source, lineNo, scanner.Text())
+		entry, skip, err := parseAllowlistEntry(source, lineNo, scanner.Text())
 		if err != nil {
 			return err
 		}
-		if entry == nil {
+		if skip {
 			continue
 		}
 		if entry.prefix.IsValid() {
@@ -1253,30 +1263,30 @@ func (bb *CaddyProtector) parseAllowlistLines(result *allowlistParseResult, sour
 	return nil
 }
 
-func parseAllowlistEntry(source string, lineNo int, raw string) (*allowlistEntry, error) {
+func parseAllowlistEntry(source string, lineNo int, raw string) (*allowlistEntry, bool, error) {
 	line := strings.TrimSpace(raw)
 	if line == "" || strings.HasPrefix(line, "#") {
-		return nil, nil
+		return nil, true, nil
 	}
 	if idx := strings.Index(line, "#"); idx >= 0 {
 		line = strings.TrimSpace(line[:idx])
 	}
 	if line == "" {
-		return nil, nil
+		return nil, true, nil
 	}
 	if strings.Contains(line, "/") {
 		prefix, err := netip.ParsePrefix(line)
 		if err != nil {
-			return nil, fmt.Errorf("ungueltiger Allowlist-Eintrag in %s Zeile %d: %q", source, lineNo, raw)
+			return nil, false, fmt.Errorf("ungueltiger Allowlist-Eintrag in %s Zeile %d: %q", source, lineNo, raw)
 		}
-		return &allowlistEntry{prefix: prefix.Masked()}, nil
+		return &allowlistEntry{prefix: prefix.Masked()}, false, nil
 	}
 
 	addr, err := netip.ParseAddr(line)
 	if err != nil {
-		return nil, fmt.Errorf("ungueltiger Allowlist-Eintrag in %s Zeile %d: %q", source, lineNo, raw)
+		return nil, false, fmt.Errorf("ungueltiger Allowlist-Eintrag in %s Zeile %d: %q", source, lineNo, raw)
 	}
-	return &allowlistEntry{addr: addr}, nil
+	return &allowlistEntry{addr: addr}, false, nil
 }
 
 func (bb *CaddyProtector) fetchIPListURL(ctx context.Context, kind, rawURL string) (string, error) {
@@ -1306,7 +1316,7 @@ func (bb *CaddyProtector) fetchURLBytesLimited(ctx context.Context, kind, rawURL
 	if err != nil {
 		return nil, fmt.Errorf("%s_url konnte nicht geladen werden: %w", kind, err)
 	}
-	defer resp.Body.Close()
+	defer func() { _ = resp.Body.Close() }()
 
 	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
 		return nil, fmt.Errorf("%s_url lieferte HTTP %d", kind, resp.StatusCode)
@@ -1547,7 +1557,7 @@ func (bb *CaddyProtector) verifyCapToken(ctx context.Context, token string) (boo
 	if err != nil {
 		return false, fmt.Errorf("siteverify request fehlgeschlagen: %w", err)
 	}
-	defer resp.Body.Close()
+	defer func() { _ = resp.Body.Close() }()
 
 	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
 		body, _ := io.ReadAll(io.LimitReader(resp.Body, 1024))
@@ -1587,6 +1597,7 @@ var (
 	_ caddyhttp.MiddlewareHandler = (*CaddyProtector)(nil)
 )
 
+// Cleanup beendet alle Hintergrund-Refreshes und gibt die Country-Datenbank frei.
 func (bb *CaddyProtector) Cleanup() error {
 	if bb.allowlistStop != nil {
 		close(bb.allowlistStop)

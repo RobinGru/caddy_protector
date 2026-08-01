@@ -1,5 +1,13 @@
 # Caddy Protector
 
+[![CI](https://github.com/RobinGru/caddy_protector/actions/workflows/ci.yml/badge.svg)](https://github.com/RobinGru/caddy_protector/actions/workflows/ci.yml)
+[![golangci-lint](https://img.shields.io/badge/linter-golangci--lint-blue?logo=go)](https://golangci-lint.run/)
+[![Go Report Card](https://goreportcard.com/badge/github.com/RobinGru/caddy_protector)](https://goreportcard.com/report/github.com/RobinGru/caddy_protector)
+[![Dependabot Updates](https://img.shields.io/github/dependabot/RobinGru/caddy_protector)](https://github.com/RobinGru/caddy_protector/network/updates)
+[![Go Version](https://img.shields.io/github/go-mod/go-version/RobinGru/caddy_protector)](go.mod)
+[![Go Reference](https://pkg.go.dev/badge/github.com/RobinGru/caddy_protector.svg)](https://pkg.go.dev/github.com/RobinGru/caddy_protector)
+[![License](https://img.shields.io/github/license/RobinGru/caddy_protector)](LICENSE)
+
 `caddy_protector` ist ein HTTP-Middleware-Modul für Caddy. Es schützt Upstreams mit einer Cap-basierten Browser-Verifikation und gibt Clients nach erfolgreicher Prüfung für eine konfigurierbare Zeit frei.
 
 Die Freigabe erfolgt über ein signiertes `HttpOnly`-Cookie. Cap übernimmt die externe Browser-Verifikation, während `caddy_protector` weiterhin Request-Filter, Allowlists, Blacklists, Country-Regeln und das lokale Freigabe-Cookie verwaltet.
