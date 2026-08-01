@@ -11,7 +11,7 @@ permissions:
   contents: read
 
 env:
-  GO_VERSION: "1.25.9"
+  GO_VERSION: "1.26.5"
 
 jobs:
   lint:
@@ -55,7 +55,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        go: ["1.25.9"]
+        go: ["1.26.5"]
     steps:
       - name: Check out code
         uses: actions/checkout@v7.0.1

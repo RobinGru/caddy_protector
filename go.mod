@@ -1,6 +1,6 @@
 module github.com/RobinGru/caddy_protector
 
-go 1.25.9
+go 1.26.5
 
 require (
 	github.com/caddyserver/caddy/v2 v2.11.4
