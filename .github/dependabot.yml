@@ -8,9 +8,6 @@ updates:
       time: "04:00"
       timezone: "Europe/Berlin"
     open-pull-requests-limit: 5
-    labels:
-      - "dependencies"
-      - "go"
     groups:
       caddy:
         patterns:
@@ -30,9 +27,6 @@ updates:
       time: "04:00"
       timezone: "Europe/Berlin"
     open-pull-requests-limit: 3
-    labels:
-      - "dependencies"
-      - "ci"
     commit-message:
       prefix: "chore(ci)"
       include: "scope"
