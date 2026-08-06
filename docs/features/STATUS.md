@@ -2,10 +2,10 @@
 
 This file is the resumable index for the feature plan. Update it only from observed repository evidence; do not infer progress from elapsed time, commit messages, or an unchecked task list.
 
-- Observed revision: `b7933345d824407873237e228a38054dc8a19331`
+- Observed revision: `77e8954a82cad446be31c583a9068edf9ff6e9b9`
 - Last verified implementation revision: `d4c959e5f0e27f17797b5f0708db84294c264aef`
-- Current focus: `release-compatibility`
-- Next safe action: A maintainer commits the verified release contract and publishes `v1.0.0` using the release process.
+- Current focus: `ci-verification-policy`
+- Next safe action: Commit the CI policy and open or update a pull request so the required checks run on the final revision.
 
 ## State definitions
 
@@ -27,8 +27,8 @@ This file is the resumable index for the feature plan. Update it only from obser
 | 2 | [Caddy integration verification](caddy-integration-verification.md) | `DONE` | `READY` | `CONFIRMED` | Tagged local Custom-Caddy harness and CI integration job use `xcaddy v0.4.5` plus synthetic Cap and recording upstream services. | `PATH=/home/rene/go/bin:/usr/local/go/bin:/usr/local/bin:/usr/bin:/bin go test -tags=integration -count=1 -timeout=5m ./...`, `go vet -tags=integration ./...`, and `git diff --check HEAD^ HEAD` passed on `e0ad773e272fb5e555b5e896f2de8ba89dda9de5`; direct assertions cover AC1–AC8. | None. | Select the next feature from this index. |
 | 3 | [Verification abuse resilience](verification-abuse-resilience.md) | `DONE` | `READY` | `CONFIRMED` | Bounded concurrency-safe per-IP token bucket with burst 15, 3-second refill, 429 retry guidance, expiry cleanup, and lifecycle reset. | `go test -race -count=1 -run '^TestVerificationAbuseResilienceAC' ./...`, `go vet ./...`, and `git diff --check HEAD^ HEAD` passed on `d4c959e5f0e27f17797b5f0708db84294c264aef`; direct tests cover AC1–AC8. | None. | Select the next feature from this index. |
 | 4 | [Operational metrics](operational-metrics.md) | `PROPOSED` | `DRAFT` | `PENDING` | None | None | Registration mode, metric prefix, and outcome vocabulary require product-owner decisions. | Approve the metric exposure and fixed-label policy. |
-| 5 | [Release and compatibility contract](release-compatibility.md) | `VERIFICATION` | `READY` | `CONFIRMED` | `README.md`, `docs/release-process.md`, `.github/RELEASE_TEMPLATE.md`, tag-triggered CI, and `release_contract_test.go` define the source-only `v1.0.0` contract. | `go test -count=1 -run '^TestReleaseContractAC$' ./...`, `go test -count=1 ./...`, `go vet ./...`, YAML parsing, and `git diff --check` passed in the current worktree. | No committed, published `v1.0.0` tag and GitHub Release exist, so release metadata cannot yet directly prove AC1–AC4 or AC6. | A maintainer commits the verified release contract and publishes `v1.0.0` using the release process. |
-| 6 | [CI verification policy](ci-verification-policy.md) | `PROPOSED` | `DRAFT` | `PENDING` | None | Current tests and vet passed at the observed revision; local lint was unavailable. | Coverage, vulnerability-outage, required-check, and integration cadence policies are undecided. | Approve the required-check and coverage policy. |
+| 5 | [Release and compatibility contract](release-compatibility.md) | `VERIFICATION` | `READY` | `CONFIRMED` | `README.md`, `docs/release-process.md`, `.github/RELEASE_TEMPLATE.md`, tag-triggered CI, and `release_contract_test.go` define the source-only `v1.0.0` contract on `77e8954a82cad446be31c583a9068edf9ff6e9b9`. | `go test -count=1 -run '^TestReleaseContractAC$' ./...`, `go test -count=1 ./...`, `go vet ./...`, YAML parsing, and `git diff --check HEAD^ HEAD` passed on `77e8954a82cad446be31c583a9068edf9ff6e9b9`. | `77e8954a82cad446be31c583a9068edf9ff6e9b9` is not integrated into `main`; no published `v1.0.0` tag or GitHub Release exists, so release metadata cannot yet directly prove AC1–AC4 or AC6. | Integrate `77e8954a82cad446be31c583a9068edf9ff6e9b9` into `main` before publishing `v1.0.0`. |
+| 6 | [CI verification policy](ci-verification-policy.md) | `VERIFICATION` | `READY` | `CONFIRMED` | One race-enabled coverage run with a 70% floor, pinned `govulncheck v1.6.0` with classified retry handling, documented policy, and direct policy tests are implemented. Required checks were configured on `main`: Lint, Vet, Test, Integration, Build, Mod tidy, and govulncheck. | Direct policy tests, the 70% threshold rejecting 69.9% and accepting 70.0%, `go test -race -shuffle=on -count=1 -coverprofile=/tmp/caddy_protector_ci_coverage.out -covermode=atomic ./...` (73.8%), `go test -count=1 ./...`, `go vet ./...`, shell/YAML parsing, the real pinned `govulncheck`, and Caddy integration passed. | The CI policy changes are not committed or run by GitHub Actions on a pull-request revision. | Commit the CI policy and open or update a pull request so the required checks run on the final revision. |
 
 ## Resume protocol
 

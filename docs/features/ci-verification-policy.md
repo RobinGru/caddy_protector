@@ -71,15 +71,13 @@ Normal CI jobs require read-only repository contents. Write permissions remain i
 | R7 | AC6 | Fork-event permission inspection |
 | Dependency outage handling | AC7 | Controlled failure classification test |
 
-## Assumptions and blockers
+## Policy decisions
 
-Product decisions required:
-
-1. Whether coverage uses an absolute floor, allowed regression from the base branch, diff coverage, or a combination.
-2. Whether `govulncheck` failure caused solely by external service unavailability blocks merging.
-3. Which checks are mandatory branch-protection checks.
-4. Whether integration verification runs on every pull request or only selected changes and scheduled builds.
+- Coverage uses an absolute 70% minimum. This is intentionally a light threshold; no base-branch or diff-coverage comparison is used.
+- `govulncheck` retries a detected external-service failure once. A repeated classified infrastructure failure is visible but does not block merging; an actual vulnerability or unclassified failure blocks merging.
+- Required pull-request checks are lint, vet, race-enabled tests with coverage, build, module-tidiness, Caddy integration, and `govulncheck`.
+- Caddy integration verification runs on every pull request, as well as `main` pushes and `v*` release tags.
 
 ## Handoff state
 
-PRODUCT DECISION REQUIRED
+READY
