@@ -6,6 +6,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"io"
 	"net"
 	"net/http"
@@ -18,7 +19,9 @@ import (
 
 	"github.com/caddyserver/caddy/v2"
 	"github.com/caddyserver/caddy/v2/modules/caddyhttp"
+	"go.uber.org/zap"
 	"go.uber.org/zap/zaptest"
+	"go.uber.org/zap/zaptest/observer"
 )
 
 type hijackableResponseWriter struct {
@@ -493,6 +496,193 @@ func TestLoadAllowlistMergesInlineFileAndURL(t *testing.T) {
 	}
 }
 
+func TestVerifyCapTokenRejectsCrossOriginRedirectWithoutCredentials(t *testing.T) {
+	received := make(chan string, 1)
+	target := httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		body, _ := io.ReadAll(r.Body)
+		received <- string(body)
+		w.WriteHeader(http.StatusOK)
+	}))
+	t.Cleanup(target.Close)
+
+	source := httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		http.Redirect(w, r, target.URL, http.StatusTemporaryRedirect)
+	}))
+	t.Cleanup(source.Close)
+
+	bb := newBaseTestProtector(t, "https://cap.example.com")
+	bb.testOutboundTransport = tlsServerTransport(t, source)
+	ok, err := bb.verifyCapToken(context.Background(), "cap-token")
+	if err == nil || ok || !strings.Contains(err.Error(), "cross-origin redirect") {
+		t.Fatalf("verifyCapToken() = (%t, %v)", ok, err)
+	}
+	if strings.Contains(err.Error(), "cap-secret") || strings.Contains(err.Error(), "cap-token") {
+		t.Fatalf("verifyCapToken() leaked sensitive data: %v", err)
+	}
+	select {
+	case body := <-received:
+		t.Fatalf("redirect target received request body: %q", body)
+	case <-time.After(50 * time.Millisecond):
+	}
+}
+
+func TestHandleVerifyRedirectFailureRedactsSensitiveData(t *testing.T) {
+	source := httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		http.Redirect(w, r, "https://other.example.com/siteverify", http.StatusTemporaryRedirect)
+	}))
+	t.Cleanup(source.Close)
+
+	bb := newBaseTestProtector(t, "https://cap.example.com")
+	bb.testOutboundTransport = tlsServerTransport(t, source)
+	core, logs := observer.New(zap.ErrorLevel)
+	bb.logger = zap.New(core)
+	state := mustReturnState(t, bb, "/protected")
+	body, err := json.Marshal(verifyRequest{Token: "cap-token", State: state})
+	if err != nil {
+		t.Fatalf("json.Marshal() error = %v", err)
+	}
+	req := httptest.NewRequest(http.MethodPost, defaultVerifyPath, bytes.NewReader(body))
+	req.Header.Set("Content-Type", "application/json")
+	rr := httptest.NewRecorder()
+	if err := bb.handleVerify(rr, req); err != nil {
+		t.Fatalf("handleVerify() error = %v", err)
+	}
+	if rr.Code != http.StatusBadGateway {
+		t.Fatalf("Status = %d", rr.Code)
+	}
+	entries := logs.FilterMessage("Cap-Siteverify fehlgeschlagen").All()
+	if len(entries) != 1 {
+		t.Fatalf("redirect failure log entries = %d", len(entries))
+	}
+	diagnostic := fmt.Sprint(entries[0].ContextMap()["error"])
+	for _, sensitive := range []string{"cap-secret", "cap-token", state} {
+		if strings.Contains(diagnostic, sensitive) {
+			t.Fatalf("redirect failure diagnostic leaked sensitive data: %q", diagnostic)
+		}
+	}
+}
+
+func TestVerifyCapTokenRejectsHTTPSDowngrade(t *testing.T) {
+	target := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		t.Fatal("HTTP redirect target must not receive a request")
+	}))
+	t.Cleanup(target.Close)
+
+	source := httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		http.Redirect(w, r, target.URL, http.StatusPermanentRedirect)
+	}))
+	t.Cleanup(source.Close)
+
+	bb := newBaseTestProtector(t, "https://cap.example.com")
+	bb.testOutboundTransport = tlsServerTransport(t, source)
+	ok, err := bb.verifyCapToken(context.Background(), "cap-token")
+	if err == nil || ok || !strings.Contains(err.Error(), "HTTPS redirect to HTTP") {
+		t.Fatalf("verifyCapToken() = (%t, %v)", ok, err)
+	}
+}
+
+func TestFetchURLBytesRejectsRedirectToNonPublicAddress(t *testing.T) {
+	source := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		http.Redirect(w, r, "https://127.0.0.1/private", http.StatusFound)
+	}))
+	t.Cleanup(source.Close)
+
+	bb := newTestProtector(t)
+	_, err := bb.fetchURLBytes(context.Background(), "whitelist", source.URL)
+	if err == nil || !strings.Contains(err.Error(), "whitelist redirect rejected: redirect target uses a non-public address") {
+		t.Fatalf("fetchURLBytes() error = %v", err)
+	}
+}
+
+func TestProvisionFailsForRejectedInitialSourceRedirect(t *testing.T) {
+	source := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		http.Redirect(w, r, "https://127.0.0.1/private", http.StatusFound)
+	}))
+	t.Cleanup(source.Close)
+
+	ctx, err := caddy.ProvisionContext(&caddy.Config{})
+	if err != nil {
+		t.Fatalf("ProvisionContext() error = %v", err)
+	}
+	bb := newTestProtector(t)
+	bb.WhitelistURL = source.URL
+	if err := bb.Provision(ctx); err == nil || !strings.Contains(err.Error(), "whitelist redirect rejected") {
+		t.Fatalf("Provision() error = %v", err)
+	}
+}
+
+func TestFetchURLBytesFollowsAllowedRedirectChain(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch r.URL.Path {
+		case "/start":
+			http.Redirect(w, r, "/one", http.StatusFound)
+		case "/one":
+			http.Redirect(w, r, "/two", http.StatusFound)
+		case "/two":
+			http.Redirect(w, r, "/final", http.StatusFound)
+		case "/final":
+			_, _ = w.Write([]byte("192.0.2.1\n"))
+		default:
+			t.Fatalf("unexpected path: %s", r.URL.Path)
+		}
+	}))
+	t.Cleanup(server.Close)
+
+	bb := newTestProtector(t)
+	body, err := bb.fetchURLBytes(context.Background(), "whitelist", server.URL+"/start")
+	if err != nil {
+		t.Fatalf("fetchURLBytes() error = %v", err)
+	}
+	if string(body) != "192.0.2.1\n" {
+		t.Fatalf("fetchURLBytes() = %q", body)
+	}
+}
+
+func TestFetchURLBytesRejectsRedirectChainBeyondLimit(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		http.Redirect(w, r, "/loop", http.StatusFound)
+	}))
+	t.Cleanup(server.Close)
+
+	ctx, cancel := context.WithTimeout(context.Background(), time.Second)
+	defer cancel()
+	bb := newTestProtector(t)
+	_, err := bb.fetchURLBytes(ctx, "whitelist", server.URL+"/loop")
+	if err == nil || !strings.Contains(err.Error(), "redirect limit of 3 exceeded") {
+		t.Fatalf("fetchURLBytes() error = %v", err)
+	}
+}
+
+func TestIPListRefreshRejectsRedirectAndRetainsSnapshot(t *testing.T) {
+	source := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		http.Redirect(w, r, "https://127.0.0.1/private", http.StatusFound)
+	}))
+	t.Cleanup(source.Close)
+
+	bb := newTestProtector(t)
+	bb.WhitelistURL = source.URL
+	previous := &ipAllowlist{exactIPs: map[netip.Addr]struct{}{netip.MustParseAddr("192.0.2.1"): {}}}
+	bb.allowlist.Store(previous)
+	core, logs := observer.New(zap.WarnLevel)
+	bb.logger = zap.New(core)
+	stop := make(chan struct{})
+	done := make(chan struct{})
+	go bb.runIPListRefreshLoop("allowlist", time.Millisecond, stop, done, bb.loadAllowlist, bb.allowlist.Store)
+
+	deadline := time.Now().Add(time.Second)
+	for logs.FilterMessage("IP-Listen-Refresh fehlgeschlagen").Len() == 0 && time.Now().Before(deadline) {
+		time.Sleep(time.Millisecond)
+	}
+	close(stop)
+	<-done
+	if logs.FilterMessage("IP-Listen-Refresh fehlgeschlagen").Len() == 0 {
+		t.Fatal("refresh failure was not logged")
+	}
+	if current := bb.allowlist.Load().(*ipAllowlist); current != previous {
+		t.Fatal("refresh replaced the previous snapshot after a rejected redirect")
+	}
+}
+
 func newTestProtector(t *testing.T) *CaddyProtector {
 	t.Helper()
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -522,6 +712,20 @@ func newTestProtectorWithVerifyResponse(t *testing.T, status int, body string) *
 	}))
 	t.Cleanup(server.Close)
 	return newBaseTestProtector(t, server.URL)
+}
+
+func tlsServerTransport(t *testing.T, server *httptest.Server) http.RoundTripper {
+	t.Helper()
+	transport, ok := server.Client().Transport.(*http.Transport)
+	if !ok {
+		t.Fatal("TLS test server did not provide an HTTP transport")
+	}
+	clone := transport.Clone()
+	serverAddress := strings.TrimPrefix(server.URL, "https://")
+	clone.DialContext = func(ctx context.Context, network, _ string) (net.Conn, error) {
+		return (&net.Dialer{}).DialContext(ctx, network, serverAddress)
+	}
+	return clone
 }
 
 func newBaseTestProtector(t *testing.T, capURL string) *CaddyProtector {

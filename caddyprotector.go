@@ -216,29 +216,30 @@ type CaddyProtector struct {
 	// CountryRefresh bestimmt das Refresh-Intervall fuer die Country-MMDB.
 	CountryRefresh caddy.Duration `json:"country_url_refresh,omitempty"`
 
-	challengeTemplate   *template.Template
-	logger              *zap.Logger
-	allowlist           atomic.Value
-	blacklist           atomic.Value
-	countryDBMu         sync.RWMutex
-	countryDB           *countryDB
-	allowlistStop       chan struct{}
-	allowlistDone       chan struct{}
-	blacklistStop       chan struct{}
-	blacklistDone       chan struct{}
-	countryStop         chan struct{}
-	countryDone         chan struct{}
-	whitelistCountrySet map[string]struct{}
-	blacklistCountrySet map[string]struct{}
-	hasCountryRules     bool
-	hasCountryWhitelist bool
-	testCountryLookup   func(netip.Addr) (string, bool)
-	testCountryLoader   func(context.Context, string) (*countryDB, error)
-	returnStateMACKey   []byte
-	cookieMACKey        []byte
-	compiledPathRules   []compiledStringRule
-	compiledQueryRules  []compiledStringRule
-	compiledHeaderRules []compiledHeaderRule
+	challengeTemplate     *template.Template
+	logger                *zap.Logger
+	allowlist             atomic.Value
+	blacklist             atomic.Value
+	countryDBMu           sync.RWMutex
+	countryDB             *countryDB
+	allowlistStop         chan struct{}
+	allowlistDone         chan struct{}
+	blacklistStop         chan struct{}
+	blacklistDone         chan struct{}
+	countryStop           chan struct{}
+	countryDone           chan struct{}
+	whitelistCountrySet   map[string]struct{}
+	blacklistCountrySet   map[string]struct{}
+	hasCountryRules       bool
+	hasCountryWhitelist   bool
+	testCountryLookup     func(netip.Addr) (string, bool)
+	testCountryLoader     func(context.Context, string) (*countryDB, error)
+	testOutboundTransport http.RoundTripper
+	returnStateMACKey     []byte
+	cookieMACKey          []byte
+	compiledPathRules     []compiledStringRule
+	compiledQueryRules    []compiledStringRule
+	compiledHeaderRules   []compiledHeaderRule
 }
 
 // CaddyModule beschreibt das Caddy-Modul und seine Instanziierung.
@@ -1311,10 +1312,13 @@ func (bb *CaddyProtector) fetchURLBytesLimited(ctx context.Context, kind, rawURL
 		return nil, fmt.Errorf("%s_url konnte nicht erstellt werden: %w", kind, err)
 	}
 
-	client := &http.Client{Timeout: 30 * time.Second}
+	client, err := bb.newOutboundHTTPClient(kind, rawURL, false, 30*time.Second)
+	if err != nil {
+		return nil, err
+	}
 	resp, err := client.Do(req)
 	if err != nil {
-		return nil, fmt.Errorf("%s_url konnte nicht geladen werden: %w", kind, err)
+		return nil, redactOutboundError(kind, err)
 	}
 	defer func() { _ = resp.Body.Close() }()
 
@@ -1553,15 +1557,18 @@ func (bb *CaddyProtector) verifyCapToken(ctx context.Context, token string) (boo
 	}
 	req.Header.Set("Content-Type", "application/json")
 
-	resp, err := (&http.Client{Timeout: 15 * time.Second}).Do(req)
+	client, err := bb.newOutboundHTTPClient("siteverify", bb.capSiteVerifyURL(), true, 15*time.Second)
 	if err != nil {
-		return false, fmt.Errorf("siteverify request fehlgeschlagen: %w", err)
+		return false, err
+	}
+	resp, err := client.Do(req)
+	if err != nil {
+		return false, redactOutboundError("siteverify", err)
 	}
 	defer func() { _ = resp.Body.Close() }()
 
 	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
-		body, _ := io.ReadAll(io.LimitReader(resp.Body, 1024))
-		return false, fmt.Errorf("siteverify lieferte HTTP %d: %s", resp.StatusCode, shortValue(string(body), 256))
+		return false, fmt.Errorf("siteverify lieferte HTTP %d", resp.StatusCode)
 	}
 
 	var result struct {
