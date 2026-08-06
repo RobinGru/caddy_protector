@@ -20,6 +20,7 @@ import (
 	"net/url"
 	"os"
 	"path"
+	"strconv"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -38,18 +39,22 @@ import (
 var defaultHTML string
 
 const (
-	defaultVerifyPath   = "/__caddy_protector/verify"
-	defaultAllowFor     = 1800 * time.Minute
-	defaultCookieName   = "caddy_protector"
-	maxVerifyBodyBytes  = 4096
-	maxIPListBytes      = 100 << 20
-	maxCountryDBBytes   = 100 << 20
-	tokenVersion        = 1
-	returnStateValidFor = 15 * time.Minute
-	returnStateContext  = "caddy_protector:return_state:v1"
-	cookieMACContext    = "caddy_protector:cookie_mac:v1"
-	configRuleSource    = "config"
-	cspSelfSource       = "'self'"
+	defaultVerifyPath            = "/__caddy_protector/verify"
+	defaultAllowFor              = 1800 * time.Minute
+	defaultCookieName            = "caddy_protector"
+	maxVerifyBodyBytes           = 4096
+	maxIPListBytes               = 100 << 20
+	maxCountryDBBytes            = 100 << 20
+	tokenVersion                 = 1
+	returnStateValidFor          = 15 * time.Minute
+	returnStateContext           = "caddy_protector:return_state:v1"
+	cookieMACContext             = "caddy_protector:cookie_mac:v1"
+	configRuleSource             = "config"
+	cspSelfSource                = "'self'"
+	verifyRateLimitBurst         = 15
+	verifyRateLimitRefill        = 3 * time.Second
+	verifyRateLimitEntryLifetime = verifyRateLimitBurst * verifyRateLimitRefill
+	maxVerifyRateLimitEntries    = 10000
 )
 
 type verifyRequest struct {
@@ -61,6 +66,11 @@ type verifyDecodeInfo struct {
 	BodyLength          int
 	BodyPreview         string
 	OriginalDecodeError string
+}
+
+type verifyRateLimitEntry struct {
+	tokens     int
+	lastRefill time.Time
 }
 
 type ipAllowlist struct {
@@ -240,6 +250,9 @@ type CaddyProtector struct {
 	compiledPathRules     []compiledStringRule
 	compiledQueryRules    []compiledStringRule
 	compiledHeaderRules   []compiledHeaderRule
+	verifyRateLimitMu     sync.Mutex
+	verifyRateLimits      map[netip.Addr]verifyRateLimitEntry
+	testNow               func() time.Time
 }
 
 // CaddyModule beschreibt das Caddy-Modul und seine Instanziierung.
@@ -278,6 +291,7 @@ func (bb *CaddyProtector) Provision(ctx caddy.Context) error {
 	if err := bb.Validate(); err != nil {
 		return err
 	}
+	bb.resetVerifyRateLimits()
 
 	challengeTemplate, err := bb.loadChallengeTemplate()
 	if err != nil {
@@ -1503,11 +1517,24 @@ func (bb *CaddyProtector) handleVerify(w http.ResponseWriter, r *http.Request) e
 		return nil
 	}
 
-	now := time.Now()
+	now := bb.now()
 	stateClaims, err := bb.verifyReturnState(req.State, now)
 	if err != nil {
 		logger.Warn("CaddyProtector-Verify fehlgeschlagen: Return-State ist ungültig", zap.Error(err))
 		http.Error(w, "challenge abgelaufen", http.StatusForbidden)
+		return nil
+	}
+
+	clientAddr, err := netip.ParseAddr(clientIP)
+	if err != nil {
+		logger.Warn("CaddyProtector-Verify fehlgeschlagen: Client-IP ist ungültig")
+		http.Error(w, "ungueltige client ip", http.StatusBadRequest)
+		return nil
+	}
+	if allowed, retryAfter := bb.allowVerifyAttempt(clientAddr.Unmap(), now); !allowed {
+		logger.Warn("CaddyProtector-Verify lokal begrenzt", zap.Duration("retry_after", retryAfter))
+		w.Header().Set("Retry-After", strconv.Itoa(retryAfterSeconds(retryAfter)))
+		http.Error(w, "too many requests", http.StatusTooManyRequests)
 		return nil
 	}
 
@@ -1540,6 +1567,61 @@ func (bb *CaddyProtector) handleVerify(w http.ResponseWriter, r *http.Request) e
 		"ok":       true,
 		"returnTo": returnTo,
 	})
+}
+
+func (bb *CaddyProtector) now() time.Time {
+	if bb.testNow != nil {
+		return bb.testNow()
+	}
+	return time.Now()
+}
+
+func (bb *CaddyProtector) resetVerifyRateLimits() {
+	bb.verifyRateLimitMu.Lock()
+	defer bb.verifyRateLimitMu.Unlock()
+	bb.verifyRateLimits = make(map[netip.Addr]verifyRateLimitEntry)
+}
+
+func (bb *CaddyProtector) allowVerifyAttempt(clientAddr netip.Addr, now time.Time) (bool, time.Duration) {
+	bb.verifyRateLimitMu.Lock()
+	defer bb.verifyRateLimitMu.Unlock()
+
+	if bb.verifyRateLimits == nil {
+		bb.verifyRateLimits = make(map[netip.Addr]verifyRateLimitEntry)
+	}
+	for addr, entry := range bb.verifyRateLimits {
+		if now.Sub(entry.lastRefill) >= verifyRateLimitEntryLifetime {
+			delete(bb.verifyRateLimits, addr)
+		}
+	}
+
+	entry, exists := bb.verifyRateLimits[clientAddr]
+	if !exists {
+		if len(bb.verifyRateLimits) >= maxVerifyRateLimitEntries {
+			return false, verifyRateLimitRefill
+		}
+		entry = verifyRateLimitEntry{tokens: verifyRateLimitBurst, lastRefill: now}
+	}
+
+	if elapsed := now.Sub(entry.lastRefill); elapsed >= verifyRateLimitRefill {
+		refills := int(elapsed / verifyRateLimitRefill)
+		entry.tokens = min(verifyRateLimitBurst, entry.tokens+refills)
+		entry.lastRefill = entry.lastRefill.Add(time.Duration(refills) * verifyRateLimitRefill)
+	}
+	if entry.tokens == 0 {
+		return false, entry.lastRefill.Add(verifyRateLimitRefill).Sub(now)
+	}
+
+	entry.tokens--
+	bb.verifyRateLimits[clientAddr] = entry
+	return true, 0
+}
+
+func retryAfterSeconds(retryAfter time.Duration) int {
+	if retryAfter <= 0 {
+		return 1
+	}
+	return int((retryAfter + time.Second - 1) / time.Second)
 }
 
 func (bb *CaddyProtector) verifyCapToken(ctx context.Context, token string) (bool, error) {
@@ -1625,5 +1707,6 @@ func (bb *CaddyProtector) Cleanup() error {
 		bb.countryDone = nil
 	}
 	bb.setCountryDB(nil)
+	bb.resetVerifyRateLimits()
 	return nil
 }

@@ -78,4 +78,4 @@ Assumption: CI may install a pinned `xcaddy` version and bind loopback ports. Th
 
 ## Handoff state
 
-VERIFICATION — local synthetic Cap integration harness and direct tests cover all acceptance criteria in an uncommitted worktree. Commit the changes and repeat the integration test on that revision before marking the feature `DONE`.
+DONE — direct tests cover all acceptance criteria, and the integration test, tagged static analysis, and commit diff check passed on `e0ad773e272fb5e555b5e896f2de8ba89dda9de5`.
