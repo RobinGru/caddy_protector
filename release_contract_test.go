@@ -22,7 +22,7 @@ func TestReleaseContractAC(t *testing.T) {
 	ciWorkflow := read(".github/workflows/ci.yml")
 
 	t.Run("AC1 and AC5 installation guidance", func(t *testing.T) {
-		if !strings.Contains(readme, "github.com/RobinGru/caddy_protector@v1.0.0") {
+		if !strings.Contains(readme, "github.com/RobinGru/caddy_protector@v1.0.1") {
 			t.Fatal("README must provide an exact production module version")
 		}
 		if !strings.Contains(readme, "@main") || !strings.Contains(readme, "instabile Entwicklungsoption") {
