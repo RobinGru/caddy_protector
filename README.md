@@ -50,7 +50,7 @@ Der Ablauf pro Request ist:
 Für den produktiven Einsatz muss Caddy mit einer exakten veröffentlichten Modulversion gebaut werden:
 
 ```bash
-xcaddy build --with github.com/RobinGru/caddy_protector@v1.0.0
+xcaddy build --with github.com/RobinGru/caddy_protector@v1.0.1
 ```
 
 ### Entwicklungs-Builds
