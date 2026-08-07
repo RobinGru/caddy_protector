@@ -47,11 +47,21 @@ Der Ablauf pro Request ist:
 
 ## Installation
 
-Das Modul ist für einen Custom-Caddy-Build gedacht, zum Beispiel mit `xcaddy`:
+Für den produktiven Einsatz muss Caddy mit einer exakten veröffentlichten Modulversion gebaut werden:
 
 ```bash
-xcaddy build --with github.com/RobinGru/caddy_protector
+xcaddy build --with github.com/RobinGru/caddy_protector@v1.0.0
 ```
+
+### Entwicklungs-Builds
+
+Ein Build aus `main` ist eine instabile Entwicklungsoption und nicht der Standard für den Produktiveinsatz:
+
+```bash
+xcaddy build --with github.com/RobinGru/caddy_protector@main
+```
+
+Der [Release-Prozess](docs/release-process.md) beschreibt die unterstützten Go- und Caddy-Bereiche, Anforderungen an Release Notes und das Vorgehen bei Rückzügen.
 
 ## Konfiguration
 

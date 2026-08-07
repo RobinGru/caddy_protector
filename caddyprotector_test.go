@@ -6,6 +6,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"io"
 	"net"
 	"net/http"
@@ -13,12 +14,16 @@ import (
 	"net/netip"
 	"os"
 	"strings"
+	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
 	"github.com/caddyserver/caddy/v2"
 	"github.com/caddyserver/caddy/v2/modules/caddyhttp"
+	"go.uber.org/zap"
 	"go.uber.org/zap/zaptest"
+	"go.uber.org/zap/zaptest/observer"
 )
 
 type hijackableResponseWriter struct {
@@ -272,6 +277,255 @@ func TestHandleVerifyRejectsFailedCapVerification(t *testing.T) {
 	}
 }
 
+func TestVerificationAbuseResilienceAC1RejectsMalformedStateAndInvalidClientBeforeCap(t *testing.T) {
+	bb, capCalls := newRecordingTestProtector(t, http.StatusOK, `{"success":true}`)
+
+	tests := []struct {
+		name string
+		req  *http.Request
+		want int
+	}{
+		{
+			name: "malformed JSON",
+			req: func() *http.Request {
+				req := httptest.NewRequestWithContext(t.Context(), http.MethodPost, defaultVerifyPath, strings.NewReader(`{"token":`))
+				req.Header.Set("Content-Type", "application/json")
+				return req
+			}(),
+			want: http.StatusBadRequest,
+		},
+		{
+			name: "invalid signed state",
+			req: func() *http.Request {
+				body, err := json.Marshal(verifyRequest{Token: "cap-token", State: "invalid"})
+				if err != nil {
+					t.Fatalf("json.Marshal() error = %v", err)
+				}
+				req := httptest.NewRequestWithContext(t.Context(), http.MethodPost, defaultVerifyPath, bytes.NewReader(body))
+				req.Header.Set("Content-Type", "application/json")
+				return req
+			}(),
+			want: http.StatusForbidden,
+		},
+		{
+			name: "missing client IP",
+			req: func() *http.Request {
+				req := verifyRequestFor(t, bb, "cap-token")
+				req.RemoteAddr = ""
+				return req
+			}(),
+			want: http.StatusBadRequest,
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			rr := httptest.NewRecorder()
+			if err := bb.handleVerify(rr, tt.req); err != nil {
+				t.Fatalf("handleVerify() error = %v", err)
+			}
+			if rr.Code != tt.want {
+				t.Fatalf("Status = %d, want %d", rr.Code, tt.want)
+			}
+		})
+	}
+	if got := capCalls.Load(); got != 0 {
+		t.Fatalf("Cap calls = %d, want 0", got)
+	}
+}
+
+func TestVerificationAbuseResilienceAC2AdmitsBurst(t *testing.T) {
+	bb, capCalls := newRecordingTestProtector(t, http.StatusOK, `{"success":true}`)
+	for i := 0; i < verifyRateLimitBurst; i++ {
+		rr := httptest.NewRecorder()
+		if err := bb.handleVerify(rr, verifyRequestFor(t, bb, "cap-token")); err != nil {
+			t.Fatalf("attempt %d: handleVerify() error = %v", i, err)
+		}
+		if rr.Code != http.StatusOK {
+			t.Fatalf("attempt %d: Status = %d", i, rr.Code)
+		}
+	}
+	if got := capCalls.Load(); got != verifyRateLimitBurst {
+		t.Fatalf("Cap calls = %d, want %d", got, verifyRateLimitBurst)
+	}
+}
+
+func TestVerificationAbuseResilienceAC3LimitsWithRetryAfter(t *testing.T) {
+	bb, capCalls := newRecordingTestProtector(t, http.StatusOK, `{"success":true}`)
+	for i := 0; i < verifyRateLimitBurst; i++ {
+		rr := httptest.NewRecorder()
+		if err := bb.handleVerify(rr, verifyRequestFor(t, bb, "cap-token")); err != nil {
+			t.Fatalf("attempt %d: handleVerify() error = %v", i, err)
+		}
+	}
+
+	rr := httptest.NewRecorder()
+	if err := bb.handleVerify(rr, verifyRequestFor(t, bb, "cap-token")); err != nil {
+		t.Fatalf("handleVerify() error = %v", err)
+	}
+	if rr.Code != http.StatusTooManyRequests {
+		t.Fatalf("Status = %d, want %d", rr.Code, http.StatusTooManyRequests)
+	}
+	if got := rr.Header().Get("Retry-After"); got != "3" {
+		t.Fatalf("Retry-After = %q, want %q", got, "3")
+	}
+	if got := rr.Header().Get("Cache-Control"); got != "no-store" {
+		t.Fatalf("Cache-Control = %q", got)
+	}
+	if got := capCalls.Load(); got != verifyRateLimitBurst {
+		t.Fatalf("Cap calls = %d, want %d", got, verifyRateLimitBurst)
+	}
+}
+
+func TestVerificationAbuseResilienceAC4RefillsOneTokenAfterThreeSeconds(t *testing.T) {
+	bb, capCalls := newRecordingTestProtector(t, http.StatusOK, `{"success":true}`)
+	now := time.Now()
+	bb.testNow = func() time.Time { return now }
+	for i := 0; i < verifyRateLimitBurst; i++ {
+		rr := httptest.NewRecorder()
+		if err := bb.handleVerify(rr, verifyRequestFor(t, bb, "cap-token")); err != nil {
+			t.Fatalf("attempt %d: handleVerify() error = %v", i, err)
+		}
+	}
+	now = now.Add(verifyRateLimitRefill)
+	rr := httptest.NewRecorder()
+	if err := bb.handleVerify(rr, verifyRequestFor(t, bb, "cap-token")); err != nil {
+		t.Fatalf("handleVerify() error = %v", err)
+	}
+	if rr.Code != http.StatusOK {
+		t.Fatalf("Status = %d, want %d", rr.Code, http.StatusOK)
+	}
+	if got := capCalls.Load(); got != verifyRateLimitBurst+1 {
+		t.Fatalf("Cap calls = %d, want %d", got, verifyRateLimitBurst+1)
+	}
+}
+
+func TestVerificationAbuseResilienceAC5ConcurrentRequestsRespectBurst(t *testing.T) {
+	bb, capCalls := newRecordingTestProtector(t, http.StatusOK, `{"success":true}`)
+	const attempts = verifyRateLimitBurst * 2
+	requests := make([]*http.Request, attempts)
+	for i := range requests {
+		requests[i] = verifyRequestFor(t, bb, "cap-token")
+	}
+
+	statuses := make(chan int, attempts)
+	var wg sync.WaitGroup
+	for _, req := range requests {
+		wg.Add(1)
+		go func(req *http.Request) {
+			defer wg.Done()
+			rr := httptest.NewRecorder()
+			if err := bb.handleVerify(rr, req); err != nil {
+				t.Errorf("handleVerify() error = %v", err)
+				return
+			}
+			statuses <- rr.Code
+		}(req)
+	}
+	wg.Wait()
+	close(statuses)
+
+	var admitted, limited int
+	for status := range statuses {
+		switch status {
+		case http.StatusOK:
+			admitted++
+		case http.StatusTooManyRequests:
+			limited++
+		default:
+			t.Fatalf("unexpected status %d", status)
+		}
+	}
+	if admitted != verifyRateLimitBurst || limited != verifyRateLimitBurst {
+		t.Fatalf("admitted = %d, limited = %d", admitted, limited)
+	}
+	if got := capCalls.Load(); got != verifyRateLimitBurst {
+		t.Fatalf("Cap calls = %d, want %d", got, verifyRateLimitBurst)
+	}
+}
+
+func TestVerificationAbuseResilienceAC6BoundsExpiresAndCleansUpState(t *testing.T) {
+	bb := newTestProtector(t)
+	now := time.Now()
+	for i := 0; i < maxVerifyRateLimitEntries+1; i++ {
+		addr := netip.AddrFrom4([4]byte{10, byte(i >> 8), byte(i), 1})
+		allowed, _ := bb.allowVerifyAttempt(addr, now)
+		if i < maxVerifyRateLimitEntries && !allowed {
+			t.Fatalf("entry %d unexpectedly rejected", i)
+		}
+		if i == maxVerifyRateLimitEntries && allowed {
+			t.Fatal("state bound did not reject a new identity")
+		}
+	}
+	if got := len(bb.verifyRateLimits); got != maxVerifyRateLimitEntries {
+		t.Fatalf("entries = %d, want %d", got, maxVerifyRateLimitEntries)
+	}
+	if allowed, _ := bb.allowVerifyAttempt(netip.MustParseAddr("192.0.2.1"), now.Add(verifyRateLimitEntryLifetime)); !allowed {
+		t.Fatal("expired entries were not reclaimed")
+	}
+	if got := len(bb.verifyRateLimits); got != 1 {
+		t.Fatalf("entries after expiry = %d, want 1", got)
+	}
+	ctx, err := caddy.ProvisionContext(&caddy.Config{})
+	if err != nil {
+		t.Fatalf("ProvisionContext() error = %v", err)
+	}
+	if err := bb.Provision(ctx); err != nil {
+		t.Fatalf("Provision() error = %v", err)
+	}
+	if got := len(bb.verifyRateLimits); got != 0 {
+		t.Fatalf("entries after provision = %d, want 0", got)
+	}
+	if err := bb.Cleanup(); err != nil {
+		t.Fatalf("Cleanup() error = %v", err)
+	}
+	if got := len(bb.verifyRateLimits); got != 0 {
+		t.Fatalf("entries after cleanup = %d, want 0", got)
+	}
+}
+
+func TestVerificationAbuseResilienceAC7KeepsCapFailureDistinct(t *testing.T) {
+	bb, capCalls := newRecordingTestProtector(t, http.StatusServiceUnavailable, `unavailable`)
+	rr := httptest.NewRecorder()
+	if err := bb.handleVerify(rr, verifyRequestFor(t, bb, "cap-token")); err != nil {
+		t.Fatalf("handleVerify() error = %v", err)
+	}
+	if rr.Code != http.StatusBadGateway {
+		t.Fatalf("Status = %d, want %d", rr.Code, http.StatusBadGateway)
+	}
+	if rr.Header().Get("Retry-After") != "" {
+		t.Fatalf("Retry-After = %q, want empty", rr.Header().Get("Retry-After"))
+	}
+	if len(rr.Result().Cookies()) != 0 {
+		t.Fatal("Cap failure must not grant a cookie")
+	}
+	if got := capCalls.Load(); got != 1 {
+		t.Fatalf("Cap calls = %d, want 1", got)
+	}
+}
+
+func TestVerificationAbuseResilienceAC8IgnoresUntrustedForwardingHeaders(t *testing.T) {
+	bb, capCalls := newRecordingTestProtector(t, http.StatusOK, `{"success":true}`)
+	for i := 0; i < verifyRateLimitBurst+1; i++ {
+		req := verifyRequestFor(t, bb, "cap-token")
+		req.RemoteAddr = "192.0.2.99:1234"
+		req.Header.Set("X-Forwarded-For", fmt.Sprintf("198.51.100.%d", i))
+		rr := httptest.NewRecorder()
+		if err := bb.handleVerify(rr, req); err != nil {
+			t.Fatalf("attempt %d: handleVerify() error = %v", i, err)
+		}
+		want := http.StatusOK
+		if i == verifyRateLimitBurst {
+			want = http.StatusTooManyRequests
+		}
+		if rr.Code != want {
+			t.Fatalf("attempt %d: Status = %d, want %d", i, rr.Code, want)
+		}
+	}
+	if got := capCalls.Load(); got != verifyRateLimitBurst {
+		t.Fatalf("Cap calls = %d, want %d", got, verifyRateLimitBurst)
+	}
+}
+
 func TestServeChallengeSetsCSPAndCapMarkup(t *testing.T) {
 	bb := newTestProtector(t)
 	req := newChallengeRequest(http.MethodGet, "http://example.com/protected", "192.0.2.1", "UA")
@@ -493,6 +747,193 @@ func TestLoadAllowlistMergesInlineFileAndURL(t *testing.T) {
 	}
 }
 
+func TestVerifyCapTokenRejectsCrossOriginRedirectWithoutCredentials(t *testing.T) {
+	received := make(chan string, 1)
+	target := httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		body, _ := io.ReadAll(r.Body)
+		received <- string(body)
+		w.WriteHeader(http.StatusOK)
+	}))
+	t.Cleanup(target.Close)
+
+	source := httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		http.Redirect(w, r, target.URL, http.StatusTemporaryRedirect)
+	}))
+	t.Cleanup(source.Close)
+
+	bb := newBaseTestProtector(t, "https://cap.example.com")
+	bb.testOutboundTransport = tlsServerTransport(t, source)
+	ok, err := bb.verifyCapToken(context.Background(), "cap-token")
+	if err == nil || ok || !strings.Contains(err.Error(), "cross-origin redirect") {
+		t.Fatalf("verifyCapToken() = (%t, %v)", ok, err)
+	}
+	if strings.Contains(err.Error(), "cap-secret") || strings.Contains(err.Error(), "cap-token") {
+		t.Fatalf("verifyCapToken() leaked sensitive data: %v", err)
+	}
+	select {
+	case body := <-received:
+		t.Fatalf("redirect target received request body: %q", body)
+	case <-time.After(50 * time.Millisecond):
+	}
+}
+
+func TestHandleVerifyRedirectFailureRedactsSensitiveData(t *testing.T) {
+	source := httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		http.Redirect(w, r, "https://other.example.com/siteverify", http.StatusTemporaryRedirect)
+	}))
+	t.Cleanup(source.Close)
+
+	bb := newBaseTestProtector(t, "https://cap.example.com")
+	bb.testOutboundTransport = tlsServerTransport(t, source)
+	core, logs := observer.New(zap.ErrorLevel)
+	bb.logger = zap.New(core)
+	state := mustReturnState(t, bb, "/protected")
+	body, err := json.Marshal(verifyRequest{Token: "cap-token", State: state})
+	if err != nil {
+		t.Fatalf("json.Marshal() error = %v", err)
+	}
+	req := httptest.NewRequestWithContext(t.Context(), http.MethodPost, defaultVerifyPath, bytes.NewReader(body))
+	req.Header.Set("Content-Type", "application/json")
+	rr := httptest.NewRecorder()
+	if err := bb.handleVerify(rr, req); err != nil {
+		t.Fatalf("handleVerify() error = %v", err)
+	}
+	if rr.Code != http.StatusBadGateway {
+		t.Fatalf("Status = %d", rr.Code)
+	}
+	entries := logs.FilterMessage("Cap-Siteverify fehlgeschlagen").All()
+	if len(entries) != 1 {
+		t.Fatalf("redirect failure log entries = %d", len(entries))
+	}
+	diagnostic := fmt.Sprint(entries[0].ContextMap()["error"])
+	for _, sensitive := range []string{"cap-secret", "cap-token", state} {
+		if strings.Contains(diagnostic, sensitive) {
+			t.Fatalf("redirect failure diagnostic leaked sensitive data: %q", diagnostic)
+		}
+	}
+}
+
+func TestVerifyCapTokenRejectsHTTPSDowngrade(t *testing.T) {
+	target := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		t.Fatal("HTTP redirect target must not receive a request")
+	}))
+	t.Cleanup(target.Close)
+
+	source := httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		http.Redirect(w, r, target.URL, http.StatusPermanentRedirect)
+	}))
+	t.Cleanup(source.Close)
+
+	bb := newBaseTestProtector(t, "https://cap.example.com")
+	bb.testOutboundTransport = tlsServerTransport(t, source)
+	ok, err := bb.verifyCapToken(context.Background(), "cap-token")
+	if err == nil || ok || !strings.Contains(err.Error(), "HTTPS redirect to HTTP") {
+		t.Fatalf("verifyCapToken() = (%t, %v)", ok, err)
+	}
+}
+
+func TestFetchURLBytesRejectsRedirectToNonPublicAddress(t *testing.T) {
+	source := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		http.Redirect(w, r, "https://127.0.0.1/private", http.StatusFound)
+	}))
+	t.Cleanup(source.Close)
+
+	bb := newTestProtector(t)
+	_, err := bb.fetchURLBytes(context.Background(), "whitelist", source.URL)
+	if err == nil || !strings.Contains(err.Error(), "whitelist redirect rejected: redirect target uses a non-public address") {
+		t.Fatalf("fetchURLBytes() error = %v", err)
+	}
+}
+
+func TestProvisionFailsForRejectedInitialSourceRedirect(t *testing.T) {
+	source := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		http.Redirect(w, r, "https://127.0.0.1/private", http.StatusFound)
+	}))
+	t.Cleanup(source.Close)
+
+	ctx, err := caddy.ProvisionContext(&caddy.Config{})
+	if err != nil {
+		t.Fatalf("ProvisionContext() error = %v", err)
+	}
+	bb := newTestProtector(t)
+	bb.WhitelistURL = source.URL
+	if err := bb.Provision(ctx); err == nil || !strings.Contains(err.Error(), "whitelist redirect rejected") {
+		t.Fatalf("Provision() error = %v", err)
+	}
+}
+
+func TestFetchURLBytesFollowsAllowedRedirectChain(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch r.URL.Path {
+		case "/start":
+			http.Redirect(w, r, "/one", http.StatusFound)
+		case "/one":
+			http.Redirect(w, r, "/two", http.StatusFound)
+		case "/two":
+			http.Redirect(w, r, "/final", http.StatusFound)
+		case "/final":
+			_, _ = w.Write([]byte("192.0.2.1\n"))
+		default:
+			t.Fatalf("unexpected path: %s", r.URL.Path)
+		}
+	}))
+	t.Cleanup(server.Close)
+
+	bb := newTestProtector(t)
+	body, err := bb.fetchURLBytes(context.Background(), "whitelist", server.URL+"/start")
+	if err != nil {
+		t.Fatalf("fetchURLBytes() error = %v", err)
+	}
+	if string(body) != "192.0.2.1\n" {
+		t.Fatalf("fetchURLBytes() = %q", body)
+	}
+}
+
+func TestFetchURLBytesRejectsRedirectChainBeyondLimit(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		http.Redirect(w, r, "/loop", http.StatusFound)
+	}))
+	t.Cleanup(server.Close)
+
+	ctx, cancel := context.WithTimeout(context.Background(), time.Second)
+	defer cancel()
+	bb := newTestProtector(t)
+	_, err := bb.fetchURLBytes(ctx, "whitelist", server.URL+"/loop")
+	if err == nil || !strings.Contains(err.Error(), "redirect limit of 3 exceeded") {
+		t.Fatalf("fetchURLBytes() error = %v", err)
+	}
+}
+
+func TestIPListRefreshRejectsRedirectAndRetainsSnapshot(t *testing.T) {
+	source := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		http.Redirect(w, r, "https://127.0.0.1/private", http.StatusFound)
+	}))
+	t.Cleanup(source.Close)
+
+	bb := newTestProtector(t)
+	bb.WhitelistURL = source.URL
+	previous := &ipAllowlist{exactIPs: map[netip.Addr]struct{}{netip.MustParseAddr("192.0.2.1"): {}}}
+	bb.allowlist.Store(previous)
+	core, logs := observer.New(zap.WarnLevel)
+	bb.logger = zap.New(core)
+	stop := make(chan struct{})
+	done := make(chan struct{})
+	go bb.runIPListRefreshLoop("allowlist", time.Millisecond, stop, done, bb.loadAllowlist, bb.allowlist.Store)
+
+	deadline := time.Now().Add(time.Second)
+	for logs.FilterMessage("IP-Listen-Refresh fehlgeschlagen").Len() == 0 && time.Now().Before(deadline) {
+		time.Sleep(time.Millisecond)
+	}
+	close(stop)
+	<-done
+	if logs.FilterMessage("IP-Listen-Refresh fehlgeschlagen").Len() == 0 {
+		t.Fatal("refresh failure was not logged")
+	}
+	if current := bb.allowlist.Load().(*ipAllowlist); current != previous {
+		t.Fatal("refresh replaced the previous snapshot after a rejected redirect")
+	}
+}
+
 func newTestProtector(t *testing.T) *CaddyProtector {
 	t.Helper()
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -522,6 +963,33 @@ func newTestProtectorWithVerifyResponse(t *testing.T, status int, body string) *
 	}))
 	t.Cleanup(server.Close)
 	return newBaseTestProtector(t, server.URL)
+}
+
+func newRecordingTestProtector(t *testing.T, status int, body string) (*CaddyProtector, *atomic.Int32) {
+	t.Helper()
+	var calls atomic.Int32
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		calls.Add(1)
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(status)
+		_, _ = w.Write([]byte(body))
+	}))
+	t.Cleanup(server.Close)
+	return newBaseTestProtector(t, server.URL), &calls
+}
+
+func tlsServerTransport(t *testing.T, server *httptest.Server) http.RoundTripper {
+	t.Helper()
+	transport, ok := server.Client().Transport.(*http.Transport)
+	if !ok {
+		t.Fatal("TLS test server did not provide an HTTP transport")
+	}
+	clone := transport.Clone()
+	serverAddress := strings.TrimPrefix(server.URL, "https://")
+	clone.DialContext = func(ctx context.Context, network, _ string) (net.Conn, error) {
+		return (&net.Dialer{}).DialContext(ctx, network, serverAddress)
+	}
+	return clone
 }
 
 func newBaseTestProtector(t *testing.T, capURL string) *CaddyProtector {
