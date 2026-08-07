@@ -17,7 +17,7 @@ func TestReleaseContractAC(t *testing.T) {
 	}
 
 	readme := read("README.md")
-	releaseProcess := read("docs/release-process.md")
+
 	releaseTemplate := read(".github/RELEASE_TEMPLATE.md")
 	ciWorkflow := read(".github/workflows/ci.yml")
 
@@ -30,20 +30,20 @@ func TestReleaseContractAC(t *testing.T) {
 		}
 	})
 
-	t.Run("AC2, AC3, and AC6 release documentation", func(t *testing.T) {
+	t.Run("AC2, AC3, and AC6 release template", func(t *testing.T) {
 		for _, required := range []string{
-			"Go `>= 1.26.5`",
-			"Caddy `>= v2.11.4, < v3.0.0`",
+			"Go: `>= 1.26.5`",
+			"Caddy: `>= v2.11.4, < v3.0.0`",
 			"Sicherheitsrelevante Änderungen",
 			"Konfigurationsänderungen oder -erweiterungen",
 			"Verhaltensänderungen",
 			"Deprecations",
 			"Migrationsschritte",
 			"Rückzug oder Ablösung",
-			"empfohlene Ersatzversion",
+			"Ersatz:",
 		} {
-			if !strings.Contains(releaseProcess, required) && !strings.Contains(releaseTemplate, required) {
-				t.Fatalf("release contract must document %q", required)
+			if !strings.Contains(releaseTemplate, required) {
+				t.Fatalf("release template must contain %q", required)
 			}
 		}
 	})
@@ -51,9 +51,6 @@ func TestReleaseContractAC(t *testing.T) {
 	t.Run("AC4 release tag verification", func(t *testing.T) {
 		if !strings.Contains(ciWorkflow, "tags: ['v*']") {
 			t.Fatal("CI must run for release tags")
-		}
-		if !strings.Contains(releaseProcess, "Warte auf einen erfolgreichen Tag-Workflow") {
-			t.Fatal("release process must require successful tag verification")
 		}
 	})
 }

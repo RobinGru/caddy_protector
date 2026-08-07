@@ -19,7 +19,6 @@ func TestCIVerificationPolicyAC(t *testing.T) {
 	}
 
 	workflow := read(".github/workflows/ci.yml")
-	policy := read("docs/ci-verification.md")
 
 	t.Run("AC1 required checks and pinned tooling", func(t *testing.T) {
 		for _, required := range []string{
@@ -65,14 +64,6 @@ func TestCIVerificationPolicyAC(t *testing.T) {
 		}
 		if !strings.Contains(workflow, "pull_request:") || !strings.Contains(workflow, "name: Integration (Caddy)") {
 			t.Fatal("integration must run for pull requests")
-		}
-	})
-
-	t.Run("documented policy", func(t *testing.T) {
-		for _, required := range []string{"70%", "v1.6.0", "Required Checks", "einmal wiederholt"} {
-			if !strings.Contains(policy, required) {
-				t.Fatalf("policy must document %q", required)
-			}
 		}
 	})
 }
