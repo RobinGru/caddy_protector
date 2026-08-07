@@ -12,7 +12,11 @@ import (
 	"time"
 )
 
-const maxOutboundRedirects = 3
+const (
+	maxOutboundRedirects = 3
+	httpScheme           = "http"
+	httpsScheme          = "https"
+)
 
 type outboundPolicy struct {
 	kind            string
@@ -67,7 +71,7 @@ func (p outboundPolicy) validateInitialURL() error {
 
 func (p outboundPolicy) validateRedirectURL(target *url.URL) error {
 	if p.capVerification {
-		if p.origin.Scheme == "https" && target.Scheme != "https" {
+		if p.origin.Scheme == httpsScheme && target.Scheme != httpsScheme {
 			return &redirectRejection{kind: p.kind, reason: "HTTPS redirect to HTTP is not allowed"}
 		}
 		if !sameOrigin(p.origin, target) {
@@ -85,13 +89,13 @@ func (p outboundPolicy) validateURL(target *url.URL, initial bool) error {
 		return fmt.Errorf("redirect target is not an absolute URL")
 	}
 
-	isOriginalLocalOrigin := p.origin.Scheme == "http" && isLoopbackHost(p.origin.Hostname()) && sameOrigin(p.origin, target)
+	isOriginalLocalOrigin := p.origin.Scheme == httpScheme && isLoopbackHost(p.origin.Hostname()) && sameOrigin(p.origin, target)
 	switch target.Scheme {
-	case "https":
+	case httpsScheme:
 		if err := validateLiteralPublicAddress(target.Hostname()); err != nil {
 			return err
 		}
-	case "http":
+	case httpScheme:
 		if !isOriginalLocalOrigin {
 			return fmt.Errorf("redirect target must use HTTPS")
 		}
@@ -99,7 +103,7 @@ func (p outboundPolicy) validateURL(target *url.URL, initial bool) error {
 		return fmt.Errorf("redirect target must use HTTP(S)")
 	}
 
-	if initial && target.Scheme == "http" && !isOriginalLocalOrigin {
+	if initial && target.Scheme == httpScheme && !isOriginalLocalOrigin {
 		return fmt.Errorf("configured URL must use HTTPS unless it is a loopback development origin")
 	}
 	return nil
@@ -114,7 +118,7 @@ func (p outboundPolicy) dialContext(ctx context.Context, network, address string
 	if err != nil {
 		return nil, err
 	}
-	allowLoopback := p.origin.Scheme == "http" && isLoopbackHost(p.origin.Hostname())
+	allowLoopback := p.origin.Scheme == httpScheme && isLoopbackHost(p.origin.Hostname())
 	for _, address := range addresses {
 		if allowLoopback && address.IsLoopback() {
 			continue
@@ -131,8 +135,8 @@ func (p outboundPolicy) dialContext(ctx context.Context, network, address string
 }
 
 func validateLiteralPublicAddress(host string) error {
-	address, err := netip.ParseAddr(host)
-	if err != nil {
+	address, _ := netip.ParseAddr(host)
+	if !address.IsValid() {
 		return nil
 	}
 	if !isPublicAddress(address) {

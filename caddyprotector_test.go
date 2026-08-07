@@ -288,7 +288,7 @@ func TestVerificationAbuseResilienceAC1RejectsMalformedStateAndInvalidClientBefo
 		{
 			name: "malformed JSON",
 			req: func() *http.Request {
-				req := httptest.NewRequest(http.MethodPost, defaultVerifyPath, strings.NewReader(`{"token":`))
+				req := httptest.NewRequestWithContext(t.Context(), http.MethodPost, defaultVerifyPath, strings.NewReader(`{"token":`))
 				req.Header.Set("Content-Type", "application/json")
 				return req
 			}(),
@@ -301,7 +301,7 @@ func TestVerificationAbuseResilienceAC1RejectsMalformedStateAndInvalidClientBefo
 				if err != nil {
 					t.Fatalf("json.Marshal() error = %v", err)
 				}
-				req := httptest.NewRequest(http.MethodPost, defaultVerifyPath, bytes.NewReader(body))
+				req := httptest.NewRequestWithContext(t.Context(), http.MethodPost, defaultVerifyPath, bytes.NewReader(body))
 				req.Header.Set("Content-Type", "application/json")
 				return req
 			}(),
@@ -792,7 +792,7 @@ func TestHandleVerifyRedirectFailureRedactsSensitiveData(t *testing.T) {
 	if err != nil {
 		t.Fatalf("json.Marshal() error = %v", err)
 	}
-	req := httptest.NewRequest(http.MethodPost, defaultVerifyPath, bytes.NewReader(body))
+	req := httptest.NewRequestWithContext(t.Context(), http.MethodPost, defaultVerifyPath, bytes.NewReader(body))
 	req.Header.Set("Content-Type", "application/json")
 	rr := httptest.NewRecorder()
 	if err := bb.handleVerify(rr, req); err != nil {

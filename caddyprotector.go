@@ -1052,9 +1052,9 @@ func validateRemoteURL(fieldName, rawURL string) error {
 	}
 
 	switch parsedURL.Scheme {
-	case "https":
+	case httpsScheme:
 		return nil
-	case "http":
+	case httpScheme:
 		if isLoopbackHost(parsedURL.Hostname()) {
 			return nil
 		}
