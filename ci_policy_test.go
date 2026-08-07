@@ -105,7 +105,7 @@ func TestGovulncheckInfrastructurePolicyAC7(t *testing.T) {
 				t.Fatal(err)
 			}
 
-			command := exec.Command("sh", "scripts/run-govulncheck.sh")
+			command := exec.CommandContext(t.Context(), "sh", "scripts/run-govulncheck.sh")
 			command.Env = append(os.Environ(),
 				"PATH="+tempDir+string(os.PathListSeparator)+os.Getenv("PATH"),
 				"GOVULNCHECK_CALLS="+callsPath,
