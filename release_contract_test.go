@@ -32,8 +32,8 @@ func TestReleaseContractAC(t *testing.T) {
 
 	t.Run("AC2, AC3, and AC6 release template", func(t *testing.T) {
 		for _, required := range []string{
-			"Go: `>= 1.26.5`",
-			"Caddy: `>= v2.11.4, < v3.0.0`",
+			"Go: `>= 1.26.10`",
+			"Caddy: `>= v2.11.7, < v3.0.0`",
 			"Sicherheitsrelevante Änderungen",
 			"Konfigurationsänderungen oder -erweiterungen",
 			"Verhaltensänderungen",

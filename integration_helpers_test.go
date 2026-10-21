@@ -21,7 +21,7 @@ import (
 	"time"
 )
 
-const integrationCaddyVersion = "v2.11.4"
+const integrationCaddyVersion = "v2.11.7"
 
 type integrationConfig struct {
 	ListenPort       int
