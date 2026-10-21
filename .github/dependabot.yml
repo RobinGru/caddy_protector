@@ -9,6 +9,10 @@ updates:
       timezone: "Europe/Berlin"
     open-pull-requests-limit: 5
     groups:
+      go-security:
+        applies-to: security-updates
+        patterns:
+          - "*"
       caddy:
         patterns:
           - "github.com/caddyserver/*"
