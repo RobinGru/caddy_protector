@@ -21,6 +21,8 @@ Wichtig: Das Modul ist eine Hürde gegen Bots, Scraper und einfachen Abuse, aber
 
 Der Ablauf pro Request ist:
 
+After handling `verify_path`, a request with a valid configured `X-API-Key` skips all remaining protection checks. See [Backend API key bypass](#backend-api-key-bypass).
+
 1. `POST`-Requests auf `verify_path` werden immer intern verarbeitet und nie an den Upstream weitergereicht.
 2. Einfache Request-Regeln für offensichtliche Scanner-Ziele und grobe Exploit-Indikatoren werden vor allen weiteren Prüfungen ausgewertet.
 3. Country-Regeln werden vor IP-Allowlist und Freigabe-Cookie ausgewertet.
@@ -73,6 +75,7 @@ Der [Release-Prozess](docs/release-process.md) beschreibt die unterstützten Go-
 | `cap_api_url` | Öffentliche Basis-URL deiner Cap-Instanz, z. B. `https://cap.example.com`. | - |
 | `cap_site_key` | Site-Key deiner Cap-Instanz. | - |
 | `cap_secret_key` | Secret-Key für `/siteverify`. Daraus werden auch die lokalen MAC-Schlüssel für Cookie und Return-State abgeleitet. | - |
+| `bypass_api_key` | Shared secret for bypassing protection through exactly one `X-API-Key` header. At least 32 bytes, without leading or trailing whitespace. | disabled |
 | `cookie_name` | Name des Freigabe-Cookies. | `caddy_protector` |
 | `cookie_path` | Path-Attribut des Freigabe-Cookies. | `/` |
 | `cookie_domain` | Optionales Domain-Attribut des Freigabe-Cookies. | - |
@@ -150,6 +153,29 @@ example.com {
   reverse_proxy 127.0.0.1:8081
 }
 ```
+
+## Backend API key bypass
+
+Set `bypass_api_key` inside your existing `caddy_protector` block to allow trusted backend applications through without Cap verification:
+
+```caddyfile
+bypass_api_key {$CADDY_PROTECTOR_API_KEY}
+```
+
+The JSON configuration field is also `bypass_api_key`. An omitted or empty value disables the bypass. Use a separate randomly generated secret with at least 32 bytes and no leading or trailing whitespace; do not reuse `cap_secret_key`. For example, `openssl rand -hex 32` generates a suitable secret. Set the same value in the Caddy process environment and your backend application's secret configuration.
+
+Send the key in the `X-API-Key` header over HTTPS. This works with GET, POST, and other HTTP methods:
+
+```sh
+curl -H "X-API-Key: $CADDY_PROTECTOR_API_KEY" https://example.com/api/status
+curl -H "X-API-Key: $CADDY_PROTECTOR_API_KEY" \
+  -H 'Content-Type: application/json' \
+  --data '{"job":"sync"}' https://example.com/api/jobs
+```
+
+A valid key skips the challenge, request deny rules, IP blacklist, and country restrictions for that request. It does not issue an allow cookie. The internal `verify_path` remains reserved. Missing, incorrect, or repeated headers follow normal protection rules; query parameters and request body fields are not accepted as bypass keys.
+
+The request body and headers are forwarded unchanged. The module does not log the key; configure Caddy access logs, other proxies, and your upstream to omit or redact `X-API-Key`. Anyone holding this secret can bypass this module's protection. Keep it server-side; upstream authentication and authorization still apply. Change the configured key and reload Caddy to revoke the old key.
 
 ## Templates und CSP
 

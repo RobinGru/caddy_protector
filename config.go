@@ -155,6 +155,9 @@ func (bb *CaddyProtector) Validate() error {
 	if strings.TrimSpace(bb.CapSecretKey) == "" {
 		return fmt.Errorf("cap_secret_key darf nicht leer sein")
 	}
+	if bb.BypassAPIKey != "" && (len(bb.BypassAPIKey) < 32 || strings.TrimSpace(bb.BypassAPIKey) != bb.BypassAPIKey) {
+		return fmt.Errorf("bypass_api_key must contain at least 32 bytes without leading or trailing whitespace")
+	}
 	if err := validateRemoteURL("cap_api_url", bb.CapAPIURL); err != nil {
 		return err
 	}

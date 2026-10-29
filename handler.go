@@ -1,6 +1,7 @@
 package caddyprotector
 
 import (
+	"crypto/subtle"
 	"mime"
 	"net/http"
 	"net/netip"
@@ -36,6 +37,10 @@ func (bb *CaddyProtector) ServeHTTP(w http.ResponseWriter, r *http.Request, next
 			return nil
 		}
 		return bb.handleVerify(w, r)
+	}
+	apiKeys := r.Header.Values("X-API-Key")
+	if bb.BypassAPIKey != "" && len(apiKeys) == 1 && subtle.ConstantTimeCompare([]byte(apiKeys[0]), []byte(bb.BypassAPIKey)) == 1 {
+		return next.ServeHTTP(w, r)
 	}
 	if match, ok := bb.matchRequestRules(r); ok {
 		fields := []zap.Field{

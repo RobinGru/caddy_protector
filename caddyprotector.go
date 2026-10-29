@@ -139,6 +139,9 @@ type CaddyProtector struct {
 	// CapSecretKey is the secret key for server-side /siteverify requests.
 	CapSecretKey string `json:"cap_secret_key,omitempty"`
 
+	// BypassAPIKey allows X-API-Key requests to skip all protection except the verify endpoint.
+	BypassAPIKey string `json:"bypass_api_key,omitempty"`
+
 	// CookieName is the name of the allow cookie.
 	CookieName string `json:"cookie_name,omitempty"`
 
