@@ -17,6 +17,7 @@ caddy_protector {
     cap_api_url https://cap.example.com
     cap_site_key site-key
     cap_secret_key secret-key
+    bypass_api_key 0123456789abcdef0123456789abcdef
     cookie_name protector
     cookie_path /foo
     cookie_domain example.com
@@ -54,6 +55,9 @@ caddy_protector {
 	}
 	if bb.VerifyPath != "/__caddy_protector/verify" {
 		t.Fatalf("VerifyPath = %q", bb.VerifyPath)
+	}
+	if bb.BypassAPIKey != "0123456789abcdef0123456789abcdef" {
+		t.Fatalf("BypassAPIKey = %q", bb.BypassAPIKey)
 	}
 	if bb.CookieName != "protector" || bb.CookiePath != "/foo" || bb.CookieDomain != "example.com" {
 		t.Fatalf("Cookie config = %q %q %q", bb.CookieName, bb.CookiePath, bb.CookieDomain)
@@ -166,6 +170,8 @@ func TestUnmarshalCaddyfileRejectsSecondDurations(t *testing.T) {
 func TestUnmarshalCaddyfileRejectsUnexpectedArgumentCount(t *testing.T) {
 	tests := []string{
 		"caddy_protector {\n\tcap_api_url\n}\n",
+		"caddy_protector {\n\tbypass_api_key\n}\n",
+		"caddy_protector {\n\tbypass_api_key first second\n}\n",
 		"caddy_protector {\n\tdisable_csp_header true\n}\n",
 	}
 	for _, input := range tests {
@@ -186,6 +192,7 @@ func TestUnmarshalCaddyfileRejectsUnknownOption(t *testing.T) {
 }
 
 func TestCaddyfileAdapterAcceptsImportedSnippet(t *testing.T) {
+	t.Setenv("CADDY_PROTECTOR_API_KEY", "0123456789abcdef0123456789abcdef")
 	input := `
 (common_protector) {
     caddy_protector {
@@ -193,6 +200,7 @@ func TestCaddyfileAdapterAcceptsImportedSnippet(t *testing.T) {
         cap_api_url https://cap.example.com
         cap_site_key site-key
         cap_secret_key secret-key
+        bypass_api_key {$CADDY_PROTECTOR_API_KEY}
         verify_path /__caddy_protector/verify
         whitelist_country AT BE DE NL US
         whitelist_url https://raw.githubusercontent.com/AnTheMaker/GoodBots/main/all.ips
@@ -210,7 +218,11 @@ example.com {
 }
 `
 	adapter := caddyfile.Adapter{ServerType: httpcaddyfile.ServerType{}}
-	if _, _, err := adapter.Adapt([]byte(input), map[string]any{"filename": "Caddyfile"}); err != nil {
+	adapted, _, err := adapter.Adapt([]byte(input), map[string]any{"filename": "Caddyfile"})
+	if err != nil {
 		t.Fatalf("Adapt() error = %v", err)
+	}
+	if !strings.Contains(string(adapted), `"bypass_api_key":"0123456789abcdef0123456789abcdef"`) {
+		t.Fatal("adapted JSON is missing the API key from the environment")
 	}
 }

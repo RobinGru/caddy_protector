@@ -90,6 +90,8 @@ func (bb *CaddyProtector) setCaddyfileOption(d *caddyfile.Dispenser, param, arg 
 		bb.CapSiteKey = arg
 	case "cap_secret_key":
 		bb.CapSecretKey = arg
+	case "bypass_api_key":
+		bb.BypassAPIKey = arg
 	case "cookie_name":
 		bb.CookieName = arg
 	case "cookie_path":
