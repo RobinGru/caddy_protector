@@ -4,7 +4,7 @@ go 1.26.10
 
 require (
 	github.com/caddyserver/caddy/v2 v2.11.7
-	github.com/oschwald/maxminddb-golang/v2 v2.8.0
+	github.com/oschwald/maxminddb-golang/v2 v2.9.0
 	github.com/zeebo/blake3 v0.2.4
 	go.uber.org/zap v1.28.0
 )
